@@ -4,5 +4,17 @@
     regexp: '^{{item.field}} '
     line: '{{item.field}} {{item.value}}'
   with_items:
-    - { field: 'AllowUsers', value: "{{ '' if is_production else '*@10.0.2.2 '}}*@{{server_network}}/24 *@{{cloud_net1_network}}/24 *@{{cloud_net2_network}}/24 *@{{mobile_vpn_network}}/24 vpn" }
+    - { field: 'AllowUsers', value: "{{ '' if is_production else '*@10.0.2.2 '}}*@{{server_network}}/24 *@{{vpn_mobile_network}}/24 *@{{openvpn_mobile_network}}/24" }
   notify: "restart sshd"
+
+# ***** FINALIZE *****
+- name: register service watcher
+  vars:
+    name: "sshd"
+  import_tasks: roles/systemd_watcher/tasks/add_watcher.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart sshd"
+    service: "sshd.service"
+  import_tasks: roles/base/tasks/service_check.yml

@@ -7,14 +7,14 @@ $CONFIG = array (
     0 => '{{server_ip}}',
     1 => '{{server_domain}}',
     2 => 'nextcloud.{{server_domain}}',
-    3 => 'fa_nextcloud.{{server_domain}}',
-    4 => 'ba_nextcloud.{{server_domain}}'
+    3 => 'fa-nextcloud.{{server_domain}}',
+    4 => 'ba-nextcloud.{{server_domain}}'
   ),
   'auth.bruteforce.protection.enabled' => false,
   'overwrite.cli.url' => '/',
   'datadirectory' => '{{nextcloud_data_path}}',
   'dbtype' => 'mysql',
-  'version' => '{{nextcloud_upgrade_from}}',
+  'version' => '{{current_nextcloud_version}}',
   'dbname' => 'nextcloud',
   'dbhost' => '127.0.0.1',
   'dbtableprefix' => 'oc_',
@@ -26,7 +26,6 @@ $CONFIG = array (
   'log_type' => 'file',
   'logfile' => '{{global_log}}nextcloud/nextcloud.log',
   'loglevel' => 2,
-  'theme' => '',
   'maintenance' => false,
   'mail_smtpmode' => 'sendmail',
   'mail_domain' => '{{server_domain}}',
@@ -53,11 +52,12 @@ $CONFIG = array (
   'memcache.locking' => '\\OC\\Memcache\\Redis',
   'redis' => 
   array (
-    'host' => '{{redis_socket_path}}redis.sock',
-    'port' => 0,
+    'host' => '127.0.0.1',
+    'port' => 6379,
     'timeout' => 0,
     'dbindex' => 0,
   ),
   'mysql.utf8mb4' => true,
   'mail_smtpauthtype' => 'LOGIN',
+  'theme' => 'smartserver'
 );

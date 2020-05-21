@@ -3,12 +3,14 @@ require 'getoptlong'
 opts = GetoptLong.new(
     [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
     ['--config', GetoptLong::REQUIRED_ARGUMENT], 
-    ['--os', GetoptLong::REQUIRED_ARGUMENT ]
+    ['--os', GetoptLong::REQUIRED_ARGUMENT ],
+    ['--ansible', GetoptLong::OPTIONAL_ARGUMENT ]
 )
 
 setup_os = ""
 setup_image = ""
 setup_config = ""
+setup_ansible = ""
 
 begin
   opts.each do |opt, arg|
@@ -26,6 +28,9 @@ vagrant [OPTION] ... CMD
 --os <suse|fedora>:
   Used linux distribution. 
 
+--ansible [-vvv]:
+  Optional argument to provide additional parameters for ansible. 
+
 CMD: 'up', 'destroy' or any other vagrant command
 
 Example: vagrant --config=demo --os=suse up 
@@ -42,6 +47,8 @@ Example: vagrant --config=demo --os=suse up
             setup_os = "fedora"
             setup_image = "fedora/31-cloud-base"
         end
+      when '--ansible'
+        setup_ansible=arg
     end
   end
   rescue
@@ -65,11 +72,11 @@ $image_name = "smartserver_" + setup_config + "_" + setup_os
 Vagrant.configure(2) do |config|
     
   env_config = File.read("config/#{setup_config}/env.yml")
-  env_match = env_config.scan(/develop_ip:\s*"([^"]*)"/).last
+  env_match = env_config.scan(/staging_ip:\s*"([^"]*)"/).last
   if env_match then
     $env_ip = env_match.first
   else
-    raise "no 'develop_ip' found in file 'config/#{setup_config}/env.yml'"
+    raise "no 'staging_ip' found in file 'config/#{setup_config}/env.yml'"
   end
   
   print "Used ip address: #{$env_ip}\n"
@@ -87,6 +94,16 @@ Vagrant.configure(2) do |config|
         vb.customize ["modifyvm", :id, "--memory", "6144"]
         vb.customize ["modifyvm", :id, "--cpus", "2"]
     end
+    setup.vm.provider "hyperv" do |hv|
+        hv.vmname = $image_name
+        hv.memory = 6144
+        hv.cpus = 2
+    end
+    #setup.vm.provider "vmware_desktop" do |vw|
+    #  vw.vmx["memsize"] = "6144"
+    #  vw.vmx["numvcpus"] = "2"
+    #end
+
     
     if setup_os == 'fedora' then
         $is_reboot_possible = true
@@ -124,7 +141,8 @@ Vagrant.configure(2) do |config|
       ansible.inventory_path = "config/#{setup_config}/server.ini"
       ansible.compatibility_mode = "2.0"
       ansible.provisioning_path = "/vagrant/"
-      
+      ansible.raw_arguments = setup_ansible
+          
       if setup_config != 'demo' then
         ansible.vault_password_file = "/tmp/vault_pass"
       end

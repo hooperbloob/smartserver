@@ -85,7 +85,8 @@
     mode: 0750
   with_items:
     - "/etc/docker/"
-    - "{{ global_lib }}docker"
+    - "{{global_lib}}docker"
+    - "/opt/docker_visualizer"
 
 - name: set docker selinux configuration => is_fedora
   sefcontext:
@@ -114,6 +115,14 @@
   vars:
     config_file: "templates/etc/fluent/_.ansible.d/docker.conf"
   import_tasks: roles/fluentd/tasks/add_config.yml
+
+- name: copy docker_visualizer
+  copy:
+    src: "templates/opt/docker_visualizer/visualizer"
+    dest: "/opt/docker_visualizer/visualizer"
+    owner: root
+    group: root
+    mode: 0700
 
 #- name: copy fluentd config => is_suse
 #  vars:
@@ -149,8 +158,37 @@
   with_items:
     - { regex: "vm\\.swappiness", line: "vm.swappiness = 1" }
     - { regex: "vm\\.overcommit_memory", line: "vm.overcommit_memory = 1" }
+
+    # IPV4 forwarding is not needed during docker build process. If you get problems, restart firewalld
+    #- { regex: "net\\.ipv4\\.ip_forward", line: "net.ipv4.ip_forward = 0" }
   register: sysctlchanged
     
 - name: refresh sysctl to activate sysctl changes => sysctl changed
   shell: sysctl -p
   when: sysctlchanged.changed
+
+# needs to be started to create docker_network
+- name: starting docker
+  systemd:
+    name: docker
+    state: started
+    
+# bridge network to allow containers host access without beeing in networkmode "host"
+- name: create host accessible network
+  docker_network:
+    name: hostaccess
+    ipam_config:
+      - subnet: "{{docker_hostaccess_network}}/24"
+        gateway: "{{docker_hostaccess_gateway}}"
+          
+# ***** FINALIZE *****
+- name: register systemd service watcher
+  vars:
+    name: "docker"
+  import_tasks: roles/systemd_watcher/tasks/add_watcher.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart docker"
+    service: "docker.service"
+  import_tasks: roles/base/tasks/service_check.yml

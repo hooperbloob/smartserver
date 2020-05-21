@@ -12,6 +12,8 @@ DocumentRoot "{{htdocs_path}}nextcloud/"
     #SetEnv HTTP_HOME {{htdocs_path}}nextcloud/
 
     #Include {{htdocs_path}}nextcloud/.htaccess
+
+    AllowOverride ALL
 </Directory>
 
 <Directory "{{htdocs_path}}nextcloud/config/">
@@ -23,13 +25,19 @@ DocumentRoot "{{htdocs_path}}nextcloud/"
 #    Require all granted
 #</LocationMatch>
 
-<LocationMatch "^/status.php|^/index.php/login/flow|^/index.php/apps/theming/manifest">
+<LocationMatch "^/status\.php|^/index.php/login/flow|^/index.php/apps/theming/|^\/(?!remote).*\.css?|^\/(?!remote).*\.js?|^\/(?!remote).*\.svg|/js/accessibility">
+    Require all granted
+</LocationMatch>
+#<LocationMatch "^/status.php|^/index.php/login/flow|^/index.php/apps/theming/manifest">
+#    Require all granted
+#</LocationMatch>
+
+<LocationMatch "^/index.php/apps/onlyoffice/.+">
     Require all granted
 </LocationMatch>
 
 Header always unset X-Frame-Options
-Header edit Content-Security-Policy "frame-ancestors 'self'" "frame-ancestors {{server_domain}} *.{{server_domain}}"
-#Header edit Content-Security-Policy ";script-src 'self' https://plugins\.keeweb\.info" ";frame-ancestors {{server_domain}} *.{{server_domain}};script-src 'self' https://plugins.keeweb.info"
+Header always edit Content-Security-Policy "frame-ancestors 'self'" "frame-ancestors {{server_domain}} *.{{server_domain}}"
 
 # fix for not submitted strict same site cookies during redirects
 SetEnvIf Cookie "(.*nc_sameSiteCookielax=.*)" SAME_SITE_COOKIE=$1

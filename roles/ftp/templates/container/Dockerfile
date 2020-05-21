@@ -1,4 +1,4 @@
-FROM alpine
+FROM alpine:{{image_version}}
 
 COPY entrypoint.sh /usr/sbin/
 

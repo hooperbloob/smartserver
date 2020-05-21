@@ -1,8 +1,9 @@
-- name: set nextcloud version
+- name: set version
   set_fact:
-    nextcloud_version: '17.0.2'
-    nextcloud_upgrade_from: '17.0.2.1' # the current installed version to be able to run "./occ upgrade"
-    
+    nextcloud_version: '18.0.4'
+  tags: [ 'update_notifier_configs' ]
+  
+# ***** PREPARE FOLDER *****
 - name: prepare needed folder
   file:
     path: "{{item}}"
@@ -24,67 +25,7 @@
   with_items:
     - "{{nextcloud_data_path}}"
     - "{{global_log}}nextcloud"
-
-- name: check nextcloud
-  stat:
-    path: "{{htdocs_path}}nextcloud-{{nextcloud_version}}/"
-  register: nextcloud_exists
-  changed_when: not nextcloud_exists.stat.exists
-  
-- name: clean old symlink => nextcloud does not exists
-  file:
-    dest: "{{htdocs_path}}nextcloud"
-    state: absent
-  when: not nextcloud_exists.stat.exists
-
-- name: install archive => nextcloud does not exists
-  unarchive:
-    src: "https://download.nextcloud.com/server/releases/nextcloud-{{nextcloud_version}}.zip"
-    dest: "{{htdocs_path}}"
-    remote_src: yes
-    owner: "{{system_users['www'].name}}"
-    group: "{{system_groups['www'].name}}"
-    mode: 0750
-  when: not nextcloud_exists.stat.exists
-
-- name: rename folder => nextcloud does not exists
-  command: "mv {{htdocs_path}}nextcloud/ {{htdocs_path}}nextcloud-{{nextcloud_version}}"
-  when: not nextcloud_exists.stat.exists
-
-- name: set symbolic link to htdocs
-  file:
-    src: "nextcloud-{{nextcloud_version}}"
-    dest: "{{htdocs_path}}nextcloud"
-    state: link
-    follow: no
-    owner: "{{system_users['www'].name}}"
-    group: "{{system_groups['www'].name}}"
-  notify: "restart apache2"
-
-#- name: bind data directory
-#  vars:
-#    source_path: "{{nextcloud_data_path}}"
-#    target_path: "{{htdocs_path}}nextcloud-data"
-#  import_tasks: roles/apache/tasks/bind_directory.yml
-  
-#- name: set symbolic link to data
-#  file:
-#    src: "{{nextcloud_data_path}}"
-#    dest: "{{htdocs_path}}nextcloud/data"
-#    state: link
-#    follow: no
-#    owner: "{{system_users['www'].name}}"
-#    group: "{{system_groups['www'].name}}"  
-#  notify: "restart apache2"
-
-- name: copy config
-  template:
-    src: "templates/config.php"
-    dest: "{{htdocs_path}}nextcloud/config/config.php"
-    owner: "{{system_users['www'].name}}"
-    group: "{{system_groups['www'].name}}"
-    mode: 0640
-
+    
 - name: prepare .ocdata file
   copy:
     content: ""
@@ -92,6 +33,27 @@
     owner: "{{system_users['www'].name}}"
     group: "{{system_groups['www'].name}}"
     mode: 0640 
+
+# ***** INSTALL ARCHIVE *****
+- name: check nextcloud
+  stat:
+    path: "{{htdocs_path}}nextcloud-{{nextcloud_version}}/"
+  register: nextcloud_version_exists
+  changed_when: not nextcloud_version_exists.stat.exists
+  
+- name: install archive => nextcloud does not exists
+  unarchive:
+    src: "https://download.nextcloud.com/server/releases/nextcloud-{{nextcloud_version}}.zip"
+    dest: "{{global_tmp}}"
+    remote_src: yes
+    owner: "{{system_users['www'].name}}"
+    group: "{{system_groups['www'].name}}"
+    mode: 0755
+  when: not nextcloud_version_exists.stat.exists
+
+- name: rename folder => nextcloud does not exists
+  command: "mv {{global_tmp}}nextcloud/ {{htdocs_path}}nextcloud-{{nextcloud_version}}"
+  when: not nextcloud_version_exists.stat.exists
 
 # ***** DATABASE *****
 - name: check mysql service
@@ -107,7 +69,7 @@
   when: "'nextcloud' not in mysql_data_exists.stdout"
   
 - name: create missing mysql user => database does not exists
-  shell: "docker exec mysql sh -c \"mysql -u root -h 127.0.0.1 -e \\\"CREATE USER '{{vault_nextcloud_mysql_username}}'@'%' IDENTIFIED BY '{{vault_nextcloud_mysql_password}}';\\\"\""
+  shell: "docker exec mysql sh -c \"mysql -u root -h 127.0.0.1 -e \\\"CREATE USER IF NOT EXISTS '{{vault_nextcloud_mysql_username}}'@'%' IDENTIFIED BY '{{vault_nextcloud_mysql_password}}';\\\"\""
   when: "'nextcloud' not in mysql_data_exists.stdout"
 
 - name: grant permissions to mysql user => database does not exists
@@ -118,10 +80,6 @@
   shell: "docker exec mysql sh -c \"mysqladmin -u root -h 127.0.0.1 flush-privileges\""
   when: "'nextcloud' not in mysql_data_exists.stdout"
 
-- name: initialise mysql database => database does not exists
-  shell: "cat roles/nextcloud/templates/nextcloud.sql | docker exec -i mysql sh -c \"mysql -u root -h 127.0.0.1 nextcloud\""
-  when: "'nextcloud' not in mysql_data_exists.stdout"
-  
 # ***** REDIS ****
 - name: check redis service => database does not exists
   import_tasks: roles/redis/tasks/wait_until_ready.yml
@@ -130,46 +88,139 @@
 # ***** APACHE *****  
 - name: check apache service
   import_tasks: roles/apache/tasks/wait_until_ready.yml
-  when: "'nextcloud' not in mysql_data_exists.stdout or not nextcloud_exists.stat.exists"
+  when: "'nextcloud' not in mysql_data_exists.stdout or not nextcloud_version_exists.stat.exists"
 
-# ***** OCC *****
-- name: upgrade existing database => database exists and nextcloud installation changed
-  shell: "docker exec apache2 sh -c \"sudo -u {{system_users['www'].name}} php {{htdocs_path}}nextcloud/occ upgrade\""
-  when: "'nextcloud' in mysql_data_exists.stdout and not nextcloud_exists.stat.exists"
+  
+  
+  
+# ***** INITIALIZE NEW *****
+- name: clean unused config.php => database does not exists
+  file:
+    dest: "{{htdocs_path}}nextcloud-{{nextcloud_version}}/config/config.php"
+    state: absent
+  when: "'nextcloud' not in mysql_data_exists.stdout"
+
+- name: backup old admin folder => database does not exists
+  command: "mv {{nextcloud_data_path}}{{vault_nextcloud_admin_username}}/ {{nextcloud_data_path}}{{vault_nextcloud_admin_username}}-{{lookup('pipe', 'date +%Y%m%d-%H%M')}}/"
+  failed_when: False
+  changed_when: False
+  when: "'nextcloud' not in mysql_data_exists.stdout"
+
+- name: initialise nextcloud => database does not exists
+  shell: "docker exec -i php sh -c \"cd {{htdocs_path}}nextcloud-{{nextcloud_version}} && php occ maintenance:install --data-dir '{{nextcloud_data_path}}' --database 'mysql' --database-host '127.0.0.1' --database-name 'nextcloud'  --database-user '{{vault_nextcloud_mysql_username}}' --database-pass '{{vault_nextcloud_mysql_password}}' --admin-user '{{vault_nextcloud_admin_username}}' --admin-pass '{{vault_nextcloud_admin_password}}'\""
+  when: "'nextcloud' not in mysql_data_exists.stdout"
+
+- name: disable password policy => database does not exists
+  shell: "docker exec php sh -c \"php {{htdocs_path}}nextcloud-{{nextcloud_version}}/occ app:disable password_policy\""
+  when: "'nextcloud' not in mysql_data_exists.stdout"
+
+- name: backup old user folder => database does not exists
+  command: "mv {{nextcloud_data_path}}{{item}}/ {{nextcloud_data_path}}{{item}}-{{lookup('pipe', 'date +%Y%m%d-%H%M')}}/"
+  with_items: "{{vault_usernames}}"
+  failed_when: False
+  changed_when: False
+  when: "'nextcloud' not in mysql_data_exists.stdout"
 
 - name: add user => database does not exists
-  shell: "docker exec apache2 sh -c \"export OC_PASS={{vault_userdata[item].web_password}}; sudo -E -u {{system_users['www'].name}} php {{htdocs_path}}nextcloud/occ user:add --password-from-env --group=\\\"users\\\" {{item}}\""
+  shell: "docker exec php sh -c \"export OC_PASS={{vault_userdata[item].web_password}}; php {{htdocs_path}}nextcloud-{{nextcloud_version}}/occ user:add --password-from-env --group=\\\"users\\\" {{item}}\""
   register: result
   failed_when: "'was created successfully' not in result.stdout"
   with_items: "{{vault_usernames}}"
   when: "'nextcloud' not in mysql_data_exists.stdout"
 
-- name: add user "{{vault_admin_username}}" => database does not exists
-  shell: "docker exec apache2 sh -c \"export OC_PASS={{vault_admin_web_password}}; sudo -E -u {{system_users['www'].name}} php {{htdocs_path}}nextcloud/occ user:add --password-from-env --group=\\\"admin\\\" {{vault_admin_username}}\""
-  register: result
-  failed_when: "'was created successfully' not in result.stdout"
-  when: "'nextcloud' not in mysql_data_exists.stdout"
-
 - name: enable cron as background job handler => database does not exists
-  shell: "docker exec apache2 sh -c \"sudo -u {{system_users['www'].name}} php -f /dataDisk/htdocs/nextcloud/occ background:cron\""
+  shell: "docker exec php sh -c \"php -f {{htdocs_path}}nextcloud-{{nextcloud_version}}/occ background:cron\""
+  when: "'nextcloud' not in mysql_data_exists.stdout"
+  
+- name: read new nextcloud config => database does not exists
+  slurp:
+    src: "{{htdocs_path}}nextcloud-{{nextcloud_version}}/config/config.php"
+  register: new_nextcloud_config
+  failed_when: False
   when: "'nextcloud' not in mysql_data_exists.stdout"
 
-# **** OTHER ****
-- name: copy fluentd config
-  vars:
-    config_file: "templates/etc/fluent/_.ansible.d/nextcloud.conf"
-  import_tasks: roles/fluentd/tasks/add_config.yml
+  
+  
+  
+# ***** INITIALIZE OLD - PRE *****
+- name: read previous nextcloud config => database exists
+  slurp:
+    src: "{{htdocs_path}}nextcloud/config/config.php"
+  register: previous_nextcloud_config
+  failed_when: False
+  when: "'nextcloud' in mysql_data_exists.stdout"
 
-- name: copy apache vhost
-  vars:
-    sub_domain: "nextcloud"
-    include: "templates/etc/apache2/_.ansible.vhost.d/nextcloud.inc"
-  import_tasks: roles/apache/tasks/add_vhost.yml
 
+
+
+# ***** CONTINUE SHARED *****
+
+# installed_nextcloud_version is the version from installed nextcloud archive
+- name: read installed nextcloud version
+  slurp:
+    src: "{{htdocs_path}}nextcloud-{{nextcloud_version}}/version.php"
+  register: installed_nextcloud_config
+
+- name: set installed nextcloud version
+  set_fact:
+    installed_nextcloud_version: "{{installed_nextcloud_config['content'] | b64decode| regex_search(\"\\$OC_Version\\s*=\\s*[^;]+\") | regex_replace(\",\",\".\") | regex_search(\"[0-9\\.]+\")}}"
+
+# current_nextcloud_version is the version from nextcloud data, maybe from the previous installation
+- name: set base nextcloud version => new
+  set_fact:
+    current_nextcloud_version: "{{new_nextcloud_config['content'] | b64decode | regex_search(\"'version'\\s*=>\\s*'([0-9\\.]+)'\") | regex_search(\"[0-9\\.]+\")}}"
+  when: "new_nextcloud_config['content'] is defined"
+
+- name: set base nextcloud version => previous
+  set_fact:
+    current_nextcloud_version: "{{previous_nextcloud_config['content'] | b64decode | regex_search(\"'version'\\s*=>\\s*'([0-9\\.]+)'\") | regex_search(\"[0-9\\.]+\")}}"
+  when: "previous_nextcloud_config['content'] is defined"
+  
+- name: set base nextcloud version => fallback
+  set_fact:
+    current_nextcloud_version: "{{installed_nextcloud_version}}"
+  when: "current_nextcloud_version is not defined"
+
+- name: set symbolic link to htdocs
+  file:
+    src: "nextcloud-{{nextcloud_version}}"
+    dest: "{{htdocs_path}}nextcloud"
+    state: link
+    follow: no
+    owner: "{{system_users['www'].name}}"
+    group: "{{system_groups['www'].name}}"
+
+- name: copy theme
+  copy:
+    src: "templates/themes/smartserver/"
+    dest: "{{htdocs_path}}nextcloud/themes/smartserver/"
+    owner: "{{system_users['www'].name}}"
+    group: "{{system_groups['www'].name}}"
+    mode: 0640
+
+- name: copy config
+  template:
+    src: "templates/config.php"
+    dest: "{{htdocs_path}}nextcloud/config/config.php"
+    owner: "{{system_users['www'].name}}"
+    group: "{{system_groups['www'].name}}"
+    mode: 0640
+
+    
+
+# ***** INITIALIZE OLD - POST *****
+- name: upgrade existing database => database exists and nextcloud version changed
+  shell: "docker exec php sh -c \"php {{htdocs_path}}nextcloud/occ upgrade\""
+  when: "current_nextcloud_version != installed_nextcloud_version"
+
+
+  
+  
+# ***** FINALIZE *****
 - name: create cron job
   vars:
     name: "Nextcloud Updates"
-    cmd: "/usr/bin/flock -n {{global_tmp}}nextcloud.lock timeout 28m docker exec apache2 sh -c \"sudo -u {{system_users['www'].name}} php -f {{htdocs_path}}nextcloud/cron.php\""
+    cmd: "/usr/bin/flock -n {{global_tmp}}nextcloud.lock timeout 28m docker exec php sh -c \"php -f {{htdocs_path}}nextcloud/cron.php\""
     file: "ansible_nextcloud"
     minute: "*/15"
   import_tasks: roles/cron/tasks/add_cronjob.yml
@@ -177,7 +228,7 @@
 - name: create cron job
   vars:
     name: "Nextcloud Fileindex"
-    cmd: "docker exec apache2 sh -c \"sudo -u {{system_users['www'].name}} php -f {{htdocs_path}}nextcloud/occ files:scan --all > /dev/null\""
+    cmd: "docker exec php sh -c \"php -f {{htdocs_path}}nextcloud/occ files:scan --all > /dev/null\""
     file: "ansible_nextcloud"
     hour: "1"
     minute: "0"
@@ -191,3 +242,41 @@
     hour: "1"
     minute: "0"
   import_tasks: roles/cron/tasks/add_cronjob.yml
+
+- name: add admin web user
+  vars:
+    username: "{{vault_nextcloud_admin_username}}"
+    password: "{{vault_nextcloud_admin_password}}"
+    group: "USER"
+  import_tasks: roles/user/tasks/add_web_user.yml
+
+- name: register webui
+  vars:
+    name: "nextcloud"
+    js_file: "templates/webui/nextcloud.js"
+    i18n_files: [ { language: "de", file: "templates/webui/nextcloud.de.json" } ]
+    icons: [ 'templates/webui/icons/nextcloud_logo.svg', 'templates/webui/icons/nextcloud_files.svg' ]
+  import_tasks: roles/apache_webui/tasks/add_webui.yml
+
+- name: copy apache vhost
+  vars:
+    sub_domain: "nextcloud"
+    include: "templates/etc/apache2/_.ansible.vhost.d/nextcloud.inc"
+  import_tasks: roles/apache/tasks/add_vhost.yml
+
+- name: copy fluentd config
+  vars:
+    config_file: "templates/etc/fluent/_.ansible.d/nextcloud.conf"
+  import_tasks: roles/fluentd/tasks/add_config.yml
+
+- name: register update notifier
+  vars:
+    name: "nextcloud"
+    type: "github"
+    url: "https://nextcloud.com/changelog/"
+    config: { 
+      project: "nextcloud/server", 
+      pattern: "^v([0-9\\.]+)$",
+      version: "v{{nextcloud_version}}" 
+    }
+  import_tasks: roles/update_notifier/tasks/add_notifier.yml

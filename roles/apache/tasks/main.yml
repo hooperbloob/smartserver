@@ -1,5 +1,8 @@
-#https://stackify.com/docker-for-php-a-start-to-finish-guide/
-
+- name: set version
+  set_fact:
+    apache_version: '2.4.43'
+  tags: [ 'update_notifier_configs' ]
+  
 - name: prepare needed folder
   file:
     path: "{{item}}"
@@ -9,6 +12,8 @@
     mode: 0755
   with_items:
     - "{{htdocs_path}}"
+    - "{{htdocs_path}}/fallback"
+    - "{{htdocs_path}}/fallback/domain"
     - "{{global_log}}apache2/"
 
 - name: check owner and group
@@ -17,7 +22,7 @@
     state: directory
     owner: "{{system_users['www'].name}}"
     group: "{{system_groups['www'].name}}"
-    recurse: yes
+    #recurse: yes
   with_items:
     - "{{htdocs_path}}"
     - "{{global_log}}apache2/"
@@ -46,6 +51,7 @@
     - _.ansible.vhost.d/auth_form2.inc
     - _.ansible.vhost.d/default-ssl.conf
     - _.ansible.server.conf
+    - _.ansible.httpd.conf
   notify: "restart apache2"
 
 - name: copy config
@@ -66,36 +72,38 @@
 
 - name: copy login form
   copy:
-    src: "templates/auth"
+    src: "templates/htdocs/auth"
     dest: "{{htdocs_path}}"
     owner: "{{system_users['www'].name}}"
     group: "{{system_groups['www'].name}}"
 
-- name: check started docker
-  systemd:
-    name: docker
-    state: started
-    
-- name: check docker image exists
-  shell: "docker images custom_apache2:1.0.0"
-  register: image_exists
-  changed_when: "'custom_apache2' not in image_exists.stdout"
- 
-- name: compose docker image => image does not exists
-  shell: "docker build -t custom_apache2:1.0.0 roles/apache/templates/container/ --build-arg GLOBAL_LOG={{global_log}}apache2 --build-arg WWW_UID={{system_users['www'].id}} --build-arg WWW_USERNAME={{system_users['www'].name}} --build-arg WWW_GID={{system_groups['www'].id}} --build-arg WWW_GROUPNAME={{system_groups['www'].name}}"
-  register: output
-  when: "'custom_apache2' not in image_exists.stdout"
+- name: copy domain fallback
+  template:
+    src: "templates/htdocs/fallback/domain/{{item}}"
+    dest: "{{htdocs_path}}fallback/domain/{{item}}"
+    owner: "{{system_users['www'].name}}"
+    group: "{{system_groups['www'].name}}"
+  with_items:
+    - index.html
+    - style.css
+
+- name: build docker image
+  vars:
+    name: "apache"
+    image_name: "custom_apache2"
+    image_version: "{{apache_version}}"
+    files:
+      - roles/apache/templates/container/Dockerfile
+  import_tasks: roles/container/tasks/build_docker_image.yml
   
 - name: create docker container
   docker_container:
     name: apache2
-    image: custom_apache2:1.0.0
+    image: "custom_apache2:{{apache_version}}"
     state: present
     network_mode: "host"
 #    recreate: true
     env:
-      APACHE_RUN_USER: "#{{system_users['www'].id}}"
-      APACHE_RUN_GROUP: "#{{system_groups['www'].id}}"
       TZ: "{{timezone}}"
     log_driver: journald
     log_options:
@@ -104,15 +112,14 @@
       #- '{{htdocs_path}}:/var/www/html:z'
       - '{{htdocs_path}}:{{htdocs_path}}:z'
       - '{{global_log}}:{{global_log}}:z'
-      - '{{redis_socket_path}}:{{redis_socket_path}}:z'
       - '{{global_etc}}apache2/_.ansible.conf.d:/etc/apache2/_.ansible.conf.d:z'
       - '{{global_etc}}apache2/_.ansible.vhost.d:/etc/apache2/_.ansible.vhost.d:z'
       - '{{global_etc}}apache2/_.ansible.server.conf:/etc/apache2/_.ansible.server.conf:z'
+      - '{{global_etc}}apache2/_.ansible.httpd.conf:/usr/local/apache2/conf/httpd.conf:z'
+
       - '/etc/certbot:/etc/certbot:z'
 
-      - '{{nextcloud_data_path}}:{{nextcloud_data_path}}:z'       # needed by nextcloud role
       - '{{projects_path}}toolbox:{{projects_path}}toolbox:z'     # needed by openhab_toolbox role
-      - '/opt/netdata_helper:/opt/netdata_helper:z'               # needed by netdata helper
 #    ports:
 #      - "81:80"
 #      - "444:443"
@@ -128,16 +135,6 @@
   register: service_change
   changed_when: "'1' in service_change.stdout"
 
-- name: create systemd service
-  vars:
-    container_name: "apache2"
-  import_tasks: roles/container/tasks/add_docker_service.yml
-
-- name: copy fluentd config
-  vars:
-    config_file: "templates/etc/fluent/_.ansible.d/apache.conf"
-  import_tasks: roles/fluentd/tasks/add_config.yml
-  
 - name: prepare .htpasswd file
   copy:
     content: ""
@@ -174,3 +171,31 @@
     owner: root
     group: root
     mode: 0640
+
+# ***** FINALIZE *****
+- name: copy fluentd config
+  vars:
+    config_file: "templates/etc/fluent/_.ansible.d/apache.conf"
+  import_tasks: roles/fluentd/tasks/add_config.yml
+  
+- name: create systemd service
+  vars:
+    container_name: "apache2"
+  import_tasks: roles/container/tasks/add_docker_service.yml
+
+- name: register update notifier
+  vars:
+    name: "apache"
+    type: "docker"
+    url: "https://www.apachelounge.com/Changelog-2.4.html"
+    config: {
+      repository: "httpd", 
+      pattern: "^([0-9\\.]+)$"
+    }
+  import_tasks: roles/update_notifier/tasks/add_notifier.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart apache2"
+    service: "apache2.service"
+  import_tasks: roles/base/tasks/service_check.yml

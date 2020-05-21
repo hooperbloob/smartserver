@@ -7,530 +7,724 @@
     <link rel="icon" type="image/png" href="/main/img/res/mipmap-mdpi/ic_launcher.png" />
     <link href="https://fonts.googleapis.com/css?family=Open+Sans" rel="stylesheet"> 
     <link href="main/manifest.json" rel="manifest">
-    <link href="main/css/main.css" rel="stylesheet"> 
-    <link href="main/css/panel.css" rel="stylesheet"> 
 
-    <script type="text/javascript">var mx = {};</script>
-	<script src="main/js/core.js"></script>
-	<script src="main/js/swipe.js"></script>
-	<script src="main/js/panel.js"></script>
-
-    <script type="text/javascript">
-        var menuPanel = false;
-        var isPhone = false;
-        
-        var readynessCount = 4; //(i18n, background image, background image title & initPage (documentready) )
-
-        var host = location.host;
-        var parts = host.split(".");
-        var authType = "";
-        if( parts.length == 3 )
-        {
-            var subDomain = parts.shift();
-            if( subDomain.indexOf("fa") === 0 ) authType = "fa_";
-            else if( subDomain.indexOf("ba") === 0 ) authType = "ba_";
-        }
-        var domain = parts.join(".");
-        
-        mx.Timer = (function( ret ) {
-            var refreshTimer = [];
-        
-            ret.clean = function()
-            {
-                if(refreshTimer.length > 0 )
+    <link href="ressources?type=css" rel="stylesheet">
+    
+    <script>var mx = { OnScriptReady: [], OnDocReady: [], Translations: [], UILevel: { 'admin': 1, 'user': 0 }, User: { 'name': '', 'uilevel': 0, 'hasAdminUi': function(){ return mx.User.uilevel == mx.UILevel.admin; }  } };</script>
+    
+    <script src="ressources?type=js"></script>
+    
+    <script>
+    <?php
+        $name = $_SERVER['REMOTE_USERNAME'];
+        $uilevel = "user";
+        $handle = fopen(".htdata", "r");
+        if ($handle) {
+            while (($line = fgets($handle)) !== false) {
+                list($_username,$_name,$_uilevel) = explode(":", $line);
+                if( trim($_username) == $name )
                 {
-                    for( i = 0; i < refreshTimer.length; i++ )
-                    {
-                        window.clearTimeout(refreshTimer[i]);
-                    }
-                    refreshTimer=[];
+                    $name = trim($_name);
+                    $uilevel = trim($_uilevel);
+                    break;
                 }
             }
 
-            ret.register = function(func,timeout)
+            fclose($handle);
+        }
+        echo "mx.User.name = " . json_encode($name) . ";\n";
+        echo "mx.User.uilevel = mx.UILevel[" . json_encode($uilevel) . "];\n";
+    ?>
+
+        // mx.Menu needs to be defined in the beginning, because it is used during component initialisation
+        mx.Menu = (function( ret ) {
+            var menuGroups = {};
+
+            function processI18N( str, mainKey )
             {
-                var refreshTimerID = window.setTimeout(function(){
-                    if( refreshTimer.includes( refreshTimerID) )
-                    { 
-                        refreshTimer.splice( refreshTimer.indexOf(refreshTimerID), 1 );
-                        func();
-                    }
-                },timeout);
-                refreshTimer.push( refreshTimerID );
+                matches = str.matchAll(/{i18n_([^}]*)}/g);
+                for (const match of matches) {
+                    str = str.replace(match[0],mx.I18N.get(match[1],mainKey));
+                }
+                return str;
             }
 
-            return ret;
-        })( mx.Timer || {} );
-
-        mx.MainImage = (function( ret ) {
-            var imageTitle = "";
-            var imageUrl = "";
-
-            function loadImage()
+            function sortMenu(entries)
             {
-                var id = Math.round( Date.now() / 1000 / ( 60 * 60 ) );
-                var src = "/img/potd/today" + ( mx.Core.isSmartphone() ? "Portrait" : "Landscape") + ".jpg?" + id;
-                var img = new Image();
-                img.onload = function()
+                var keys = Object.keys(entries);
+                
+                keys.sort(function(a,b)
                 {
-                    imageUrl = src;
-                    initContent();
-                };
-                img.onerror = function()
+                    if( entries[a]['order'] < entries[b]['order'] ) return -1;
+                    if( entries[a]['order'] > entries[b]['order'] ) return 1;
+                    return 0;
+                });
+                
+                var result = {};
+                
+                for( key in keys )
                 {
-                    initContent();
-                };
-                img.src = src;
+                    result[keys[key].toString()] = entries[keys[key]];
+                }
+
+                return result;
             }
 
-            function loadTitle()
+            ret.getMainGroup = function(mainGroupId)
             {
-                var id = Math.round( Date.now() / 1000 / ( 60 * 60 ) );
-                //mx.Actions.openMenu(mx.$('#defaultEntry'),"nextcloud");
-                var xhr = new XMLHttpRequest();
-                xhr.open("GET", "/img/potd/todayTitle.txt?" + id);
-                xhr.onreadystatechange = function() {
-                    if (this.readyState != 4) return;
-                    
-                    if( this.status == 200 ) imageTitle = this.response;
-                    else alert("was not able to download '/img/potd/todayTitle.txt?'");
-                    initContent();
-                };
-                xhr.send();
-            }
-            
-            ret.getUrl = function()
-            {
-                return imageUrl;
-            }
-
-            ret.getTitle = function()
-            {
-                return imageTitle;
-            }
-            
-            ret.init = function()
-            {
-                loadImage();
-                loadTitle();
-            }
-
-            return ret;
-        })( mx.MainImage || {} );
-
-        mx.I18N = (function( ret ) {
-            var translations = null;
-
-            ret.init = function()
-            {
-                var lang = navigator.language || navigator.userLanguage;
-
-                var url = "";
-                if( lang.indexOf("de") === 0 ) url = "index.de.json";
-                if( url !== "" )
+                if(mainGroupId in menuGroups)
                 {
-                    var xhr = new XMLHttpRequest();
-                    xhr.open("GET", url, true);
-                    xhr.onreadystatechange = function() {
-                        if (this.readyState != 4) return;
-
-                        if( this.status == 200 ) translations = JSON.parse(this.responseText);
-                        else alert("was not able to download '" + url + "'");
-                        initContent();
-                    };
-                    xhr.send();
+                    return menuGroups[mainGroupId]['_'];
                 }
                 else
                 {
-                    initContent();
+                    console.error("MenuGroup '" + mainGroupId + "' not found");
                 }
-            }
+            };
 
-            ret.get = function(string)
+            /*ret.getMainGroups = function()
             {
-                if( translations )
+                return Object.values(menuGroups).map( entry => entry['_'] );
+            };*/
+
+            ret.addMainGroup = function(mainGroupId,order,title)
+            {
+                var mainGroup = menuGroups[mainGroupId] = {
+                    id:mainGroupId,
+                    order: order,
+                    title: title,
+                    subGroups: {},
+                    _: {
+                        getId: function(){ return mainGroupId; },
+                        getTitle: function(){ return mainGroup['title']; },
+                        getSubGroup: function(subGroupId){ return mainGroup['subGroups'][subGroupId]['_']; },
+                        //getSubGroups: function(){ return Object.values(mainGroup['subGroups']).map( entry => entry['_'] ); },
+                        addSubGroup: function(subGroupId,order,title,iconUrl){
+                            var subGroup = mainGroup['subGroups'][subGroupId] = {
+                                id:subGroupId, order: order, title: title, iconUrl: iconUrl,
+                                menuEntries: {},
+                                _: {
+                                    isEntry: function(){ return false; },
+                                    getId: function(){ return subGroupId; },
+                                    getTitle: function(){ return subGroup['title']; },
+                                    getMainGroup: function(){ return mainGroup['_']; },
+                                    getEntry: function(entryId){ return subGroup['menuEntries'][entryId]['_']; },
+                                    getEntries: function(){ return Object.values(subGroup['menuEntries']).map( entry => entry['_'] ); },
+                                    addUrl: function(entryId,order,uilevel,url,title,info,newWindow,iconUrl){
+                                        var entries = subGroup['menuEntries'];
+                                        var entry = entries[entryId] = {
+                                            id: entryId, order:order,uilevel:mx.UILevel[uilevel],type:'url',url:url,title:title,info:info,newWindow:newWindow, iconUrl: iconUrl,
+                                            _: {
+                                                isEntry: function(){ return true; },
+                                                getId: function(){ return entry['id']; },
+                                                //getOrder: function(){ return entry['order']; },
+                                                getUiLevel: function(){ return entry['uilevel']; },
+                                                getType: function(){ return entry['type']; },
+                                                getSubGroup: function(){ return subGroup['_']; },
+                                                getTitle: function(){ return entry['title']; },
+                                                getInfo: function(){ return entry['info']; },
+                                                getNewWindow: function(){ return entry['newWindow']; },
+                                                getIconUrl: function(){ return entry['iconUrl']; },
+                                                getUrl: function(){ return entry['url']; }
+                                            }
+                                        };
+                                    },
+                                    addHtml: function(entryId,order,uilevel,html,callback){
+                                        var entries = subGroup['menuEntries'];
+                                        var entry = entries[entryId] = {
+                                            id: entryId, order:order,uilevel:mx.UILevel[uilevel],type:'html',html:html,callback:callback,
+                                            _: {
+                                                isEntry: function(){ return true; },
+                                                getId: function(){ return entry['id']; },
+                                                //getOrder: function(){ return entry['order']; },
+                                                getUiLevel: function(){ return entry['uilevel']; },
+                                                getType: function(){ return entry['type']; },
+                                                getSubGroup: function(){ return subGroup['_']; },
+                                                getHtml: function(){ return entry['html']; },
+                                                getCallback: function(){ return entry['callback']; }
+                                            }
+                                        };
+                                    }
+                                }
+                            };
+                            return subGroup['_'];
+                        }
+                    }
+                };
+
+                return mainGroup['_'];
+            };
+
+            ret.buildMenu = function(subGroup, callback)
+            {
+                var entries = [];
+                var callbacks = [];
+
+                var menuEntries = subGroup.getEntries();
+                for(var i = 0; i < menuEntries.length; i++)
                 {
-                    if( typeof translations[string] !== "undefined" )
+                    var entry = menuEntries[i];
+                    
+                    if( entry.getUiLevel() > mx.User.uilevel )
                     {
-                        return translations[string];
+                        continue;
+                    }
+
+                    if( entry.getType() == 'html' )
+                    {
+                        entries.push(entry.getHtml());
+                        callbacks.push(entry.getCallback());
                     }
                     else
                     {
-                        console.error("translation key '" + string + "' not found" );
+                        entries.push('<div class="service button ' + i + '" onClick="mx.Actions.openEntryById(event,\'' + subGroup.getMainGroup().getId() + '\',\'' + subGroup.getId() + '\',\'' + entry.getId() + '\')"><div>' + entry.getTitle() + '</div><div>' + entry.getInfo() + '</div></div>');
                     }
                 }
-                return string;
-            }
 
-            return ret;
-        })( mx.I18N || {} );
-        
-        mx.Alarms = (function( ret ) {
-            var alarmIsWorking = true;
+                callback(entries.join(""),callbacks);
+            };
 
-            function handleAlarms(data) 
-            { 
-                var warnCount = 0;
-                var errorCount = 0;
-                
-                for(x in data.alarms) 
-                {
-                    if(!data.alarms.hasOwnProperty(x)) continue;
-
-                    var alarm = data.alarms[x];
-                    if(alarm.status === 'WARNING')
-                    {
-                        warnCount++;
-                    }
-                    if(alarm.status === 'CRITICAL')
-                    {
-                        errorCount++;
-                    }
-                }
-            
-                mx.$$('.alarm.button .badge').forEach(function(element){ element.innerText = warnCount + errorCount });
-
-                var badgeButtons = mx.$$('.alarm.button');
-                if( warnCount > 0 )
-                {
-                    badgeButtons.forEach(function(element){ element.classList.add("warn") });
-                }
-                else
-                {
-                    badgeButtons.forEach(function(element){ element.classList.remove("warn") });
-                }
-                if( errorCount > 0 )
-                {
-                    badgeButtons.forEach(function(element){ element.classList.add("error") });
-                }
-                else
-                {
-                    badgeButtons.forEach(function(element){ element.classList.remove("error") });
-                }
-            }            
-
-            function loadAlerts()
+            ret.init = function()
             {
-                var id = Math.round( Date.now() / 1000 );
-                
-                var xhr = new XMLHttpRequest();
-                xhr.open("GET", "//" + authType + "netdata." + domain + "/api/v1/alarms?active&_=" + id);
-                xhr.withCredentials = true;
-                xhr.onreadystatechange = function() {
-                    if (this.readyState != 4) return;
+                // needs to work with keys directly, because this is the post processing part of the data
+                for( mainKey in menuGroups )
+                {
+                    var mainGroup = menuGroups[mainKey];
                     
-                    if( this.status == 200 )
+                    var match = mainGroup['title'].match(/{i18n_([^}]*)}/);
+                    if( match !== null ) mainGroup['title'] = mainGroup['title'].replace(match[0],mx.I18N.get(match[1],mainKey));
+
+                    for( subKey in mainGroup['subGroups'] )
                     {
-                        if( !alarmIsWorking )
+                        var subGroup = mainGroup['subGroups'][subKey];
+
+                        subGroup['title'] = processI18N(subGroup['title'],mainKey);
+
+                        for( entryKey in subGroup['menuEntries'] )
                         {
-                            mx.$(".alarm.button").classList.remove("disabled");
-                            alarmIsWorking = true;
+                            var entry = subGroup['menuEntries'][entryKey];
+
+                            if( entry['type'] === 'url' )
+                            {
+                                entry['title'] = processI18N(entry['title'],mainKey+'_'+subKey);
+                                entry['info'] = processI18N(entry['info'],mainKey+'_'+subKey);
+
+                                match = entry['url'].match(/(\/\/)([^\.]*)\.({host})/);
+                                if( match !== null ) entry['url'] = entry['url'].replace('//' + match[2] + "." + match[3], "//" + mx.Host.getAuthPrefix() + match[2] + "." + mx.Host.getDomain() );
+                            }
+                            else
+                            {
+                                entry['html'] = processI18N(entry['html'],mainKey+'_'+subKey);
+                            }
                         }
-                        handleAlarms( JSON.parse(this.response) );
                     }
-                    else if( alarmIsWorking )
-                    {
-                        mx.$(".alarm.button").classList.add("disabled");
-                        alarmIsWorking = false;
-                    }
-                    window.setTimeout(loadAlerts,4500);
-                };
-                xhr.send();
-            }
+                }
 
-            ret.init = function()
-            {
-                mx.$$('.alarm.button').forEach(function(element){ 
-                    element.addEventListener("click",function()
+                var template = mx.$('#menuTemplate');
+
+                var _menuGroups = sortMenu( menuGroups );
+                for( index in _menuGroups )
+                {
+                    var mainGroup = _menuGroups[index];
+                    
+                    if( mainGroup['id'] == 'home' ) continue;
+                    
+                    var _subGroups = sortMenu( mainGroup['subGroups'] );
+
+                    var entryStates = {}
+                    for( index in _subGroups )
                     {
-                        mx.Actions.openUrl(null,null,"//" + authType + "netdata." + domain,false);
-                    });
-                });
-                loadAlerts();
-            }
+                        var subGroup = _subGroups[index];
+                        
+                        var hasEntries = false;
+                        for( entryKey in subGroup['menuEntries'] )
+                        {
+                            var entry = subGroup['menuEntries'][entryKey];
+                            
+                            if( entry['uilevel'] <= mx.User.uilevel )
+                            {
+                                hasEntries = true;
+                                break;
+                            }
+                        }
+                        
+                        entryStates[subGroup['id']] = hasEntries
+                    }
+                    
+                    var menuDiv = template.cloneNode(true);
+                    menuDiv.setAttribute('id',mainGroup['id']);
+                    menuDiv.querySelector('.header').innerHTML = mainGroup['title'];
+                    menuDiv.style.display = "";
+                    template.parentNode.appendChild(menuDiv);
+
+                    var buttonTemplate = menuDiv.querySelector('.service.button');
+                    menuDiv.removeChild(buttonTemplate);
+
+                    for( index in _subGroups )
+                    {
+                        var subGroup = _subGroups[index];
+                        
+                        if( !entryStates[subGroup['id']] ) continue;
+
+                        var button = buttonTemplate.cloneNode(true);
+                        button.setAttribute("id", mainGroup['id'] + '-' + subGroup['id'] );
+                        button.setAttribute("onClick","mx.Actions.openMenuById('" + mainGroup['id'] + "','" + subGroup['id'] + "');");
+                        button.firstChild.innerHTML = subGroup['iconUrl'] ? '<img src="main/icons/' + subGroup['iconUrl'] + '" height="20" width="20" />' : '';
+                        button.lastChild.innerHTML = subGroup['title'];
+                        menuDiv.appendChild(button);
+
+                        subGroup['menuEntries'] = sortMenu( subGroup['menuEntries'] );
+                    }
+                }
+            };
+
+            ret.addMainGroup('home', -1, 'Home').addSubGroup('home', -1, 'Home');
+
+            var mainGroup = ret.addMainGroup('automation', 2000, '{i18n_Automation}');
+
+            mainGroup = ret.addMainGroup('other', 3000, '{i18n_Other}');
+            mainGroup.addSubGroup('states', 100, mx.User.uilevel == 1 ? '{i18n_Logs & States}' : '{i18n_States}', 'core_stats.svg');
+            mainGroup.addSubGroup('tools', 200, '{i18n_Tools}', 'core_tools.svg');
+            mainGroup.addSubGroup('devices', 300, '{i18n_Devices}', 'core_devices.svg');
 
             return ret;
-        })( mx.Alarms || {} );
+        })( mx.Menu || {} );
+    </script>
 
-        mx.Cameras = (function( ret ) {
-            function refreshCamera(container)
-            {
-                var image = container.querySelector('img');
-                var timeSpan = container.querySelector('span.time');
-                var nameSpan = container.querySelector('span.name');
-                
-                var datetime = new Date();
-                var h = datetime.getHours();
-                var m = datetime.getMinutes();
-                var s = datetime.getSeconds();
+    <script src="ressources?type=components"></script>
 
-                var time = ("0" + h).slice(-2) + ':' + ("0" + m).slice(-2) + ':' + ("0" + s).slice(-2);
-                timeSpan.innerText = time;
-                nameSpan.innerText = image.getAttribute('data-name');
-                
-                var img = new Image();
-                var id = Date.now();
-                let src = image.getAttribute('data-src') + '?' + id;
-                img.onload = function()
-                {
-                    image.setAttribute('src',src);
-                };
-                img.onerror = function()
-                {
-                    image.setAttribute('src',src);
-                };
-                img.src = src;
+    <script>
+        var demoMode = document.location.search.indexOf("demo=") !== -1;
 
-                mx.Timer.register(function(){refreshCamera(container);},image.getAttribute('data-interval'));
-            }
+        var pageReady = false;
+        
+        var menuPanel = false;
+        var visualisationType = "phone";
 
-            ret.init = function()
-            {
-                var containers = mx.$$('.service.camera > div');
-                containers.forEach(function(container){
-
-                    var timeSpan = document.createElement("span");
-                    timeSpan.classList.add("time");
-
-                    var nameSpan = document.createElement("span");
-                    nameSpan.classList.add("name");
-
-                    container.appendChild(timeSpan);
-                    container.appendChild(nameSpan);
-
-                    refreshCamera(container);
-                });
-            }
-
-            return ret;
-        })( mx.Cameras || {} );
+        var readynessCount = 3; //(background image (scriptready), background image title (scriptready) & initPage (documentready) )
 
         mx.Actions = (function( ret ) {
-            var activeMenu = "";
-            var subMenus = [];
+            var sideElement = null;
+            var inlineElement = null;
+            var iframeElement = null;
+            var iframeProgressElement = null;
             
-            function initMenus()
+            var iframeLoadingTimer = null;
+            
+            function iFrameLoadHandler(e)
             {
-                subMenus['nextcloud'] = [
-                    ['url','//' + authType + 'nextcloud.'+domain+'/',mx.I18N.get('Documents'),'',false],
-                    ['url','//' + authType + 'nextcloud.'+domain+'/index.php/apps/news/',mx.I18N.get('News'),'',false],
-                    ['url','//' + authType + 'nextcloud.'+domain+'/index.php/apps/keeweb/',mx.I18N.get('Keys'),mx.I18N.get('Keeweb'),true]
-                ];
-                subMenus['openhab'] = [
-                    ['url','//' + authType + 'openhab.'+domain+'/basicui/app',mx.I18N.get('Control'),mx.I18N.get('Basic UI'),false],
-                    ['url','//' + authType + 'openhab.'+domain+'/paperui/index.html',mx.I18N.get('Administration'),mx.I18N.get('Paper UI'),false],
-                    ['url','//' + authType + 'openhab.'+domain+'/habpanel/index.html',mx.I18N.get('Tablet UI'),mx.I18N.get('HabPanel'),false],
-                    ['url','//' + authType + 'openhab.'+domain+'/habot',mx.I18N.get('Chatbot'),mx.I18N.get('Habot'),false]
-                ];
-                subMenus['camera'] = [
-                    ['html','<div class="service camera">'],
-                    {% for camera in webui_urls.cameras %}
-                        ['html','<div><a href="{{camera.clickUrl}}" target="_blank"><img src="/main/img/loading.png" data-name="{{camera.title}}" data-src="{{camera.imageUrl}}" data-interval="{{camera.interval}}"></a></div>'],
-                    {% endfor %}
-                    ['html','</div>'],
-                    ['js','mx.Cameras.init']
-                ];
-                subMenus['tools'] = [
-                    ['url','/grafana/d/server-health/server-health',mx.I18N.get('Charts'),mx.I18N.get('Grafana'),false],
-                    ['url','//' + authType + 'kibana.'+domain+'/app/kibana#/dashboard/1431e9e0-1ce7-11ea-8fe5-3b6764e6f175',mx.I18N.get('Analytics'),mx.I18N.get('Kibana'),false],
-    //                ['url','/kibana/app/kibana#/dashboard/02e01270-1b34-11ea-9292-eb71d66d1d45',mx.I18N.get('Analytics'),mx.I18N.get('Kibana'),false],
-                    ['url','//' + authType + 'netdata.'+domain+'/',mx.I18N.get('State'),mx.I18N.get('Netdata'),false]
-                ];
-                subMenus['admin'] = [
-                    ['url','/mysql/',mx.I18N.get('MySQL'),mx.I18N.get('phpMyAdmin'),false],
-                    ['url','//' + authType + 'openhab.'+domain+'/toolbox/web/weatherDetailOverview.php', mx.I18N.get('Weatherforcast'),mx.I18N.get('Meteo Group'),false]
-                ];
-                subMenus['devices'] = [
-                    {% for device in webui_urls.devices %}
-                        ['url','{{device.url}}','{{device.title}}','{{device.name}}','{{device.openInNewWindow}}']{{'' if loop.last else ','}}
-                    {% endfor %}
-                ];
+                var url = null;
+                try
+                {
+                    var url = e.target.contentWindow.location.href;
+                }
+                catch{}
+                
+                if( !url )
+                {
+                    url = iframeElement.getAttribute("src");
+                    if( url ) console.log(" FALLBACK URL" );
+                }
+
+                console.log(">>>> IFRAME " + history.length + " " + url + " <<<<");
+                console.log(history.state);
+
+                if( url )
+                {
+                    if( url == 'about:blank' )
+                    {
+                        if( history.state && history.state["entryId"] )
+                        {
+                            console.log(" ADDITIONAL POP");
+                            history.back();
+                        }
+                        return;
+                    }
+                    else
+                    {
+                        var entry = mx.History.getEntry(url);
+                        if( entry )
+                        {
+                            if( entry !== mx.History.getActiveNavigation() )
+                            {
+                                if( entry.isEntry() )
+                                {
+                                    activateMenu(entry.getSubGroup());
+                                    mx.History.replaceEntry(entry,null);
+                                }
+                                else
+                                {
+                                    console.log("Should not happen " + entry.getId() );
+                                    debugger;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            console.err("iFrameLoadHandler: MATCHING HISTORY NOT FOUND");
+                        }
+                    }
+                }    
+                
+                if( iframeElement.style.display != "" )
+                {
+                    hideMenu();
+                    showIFrame();
+                }
+            }
+            
+            function clearIFrameTimer()
+            {
+                if( iframeLoadingTimer ) 
+                {
+                    clearTimeout(iframeLoadingTimer);
+                    iframeLoadingTimer = null; 
+                }
+            }
+            
+            function setIFrameUrl(url)
+            {
+                if( iframeElement.getAttribute("url") != url )
+                {
+                    iframeElement.setAttribute('src', url );
+
+                    iframeProgressElement.style.display = "";
+                    
+                    // is needed to show iframe content in case of a loading error.
+                    // happens e.g. on firefox and not accepted self signed certificates for subdomains in the demo instance
+                    iframeLoadingTimer = setTimeout(function(){ showIFrame(); },10000);
+
+                    hideMenu();
+                }
+            }
+            
+            function showIFrame()
+            {
+                if( iframeElement.style.display != "" )
+                {
+                    clearIFrameTimer();
+
+                    iframeProgressElement.style.display = "none";
+
+                    iframeElement.style.display = "";
+                    window.setTimeout(function(){ iframeElement.style.opacity = 1; }, 0);
+                }
+            }
+            
+            function hideIFrame()
+            {
+                if( iframeElement.style.display == "" || iframeProgressElement.style.display == "" )
+                {
+                    clearIFrameTimer();
+
+                    iframeElement.removeAttribute('src');
+                    
+                    mx.Core.waitForTransitionEnd(iframeElement,function(){ iframeElement.style.display = "none"; },"setSubMenu2");
+                    iframeElement.style.opacity = "";
+                    
+                    iframeProgressElement.style.display = "none";
+                }
+            }
+            
+            function hideMenu()
+            {
+                mx.Timer.clean();
+
+                if( inlineElement.style.display == "" )
+                {
+                    //mx.$$(".service.active").forEach(function(element){ element.classList.remove("active"); });
+                    inlineElement.style.display = "none";
+                    sideElement.classList.remove("inline");
+                    sideElement.classList.add("iframe");
+                }
             }
 
-            function cleanMenu()
+            function showMenu()
             {
-                mx.$$(".service.active").forEach(function(element){ element.classList.remove("active") });
-                mx.$("#content iframe").style.display = "none";
-                mx.$("#content iframe").setAttribute('src',"about:blank");
-                mx.$("#content #inline").style.display = "";
-            }
+                mx.Timer.clean();
 
-            function setMenu(data,callbacks)
+                if( inlineElement.style.display != "" )
+                {
+                    inlineElement.style.display = "";
+                    sideElement.classList.add("inline");
+                    sideElement.classList.remove("iframe");
+
+                    hideIFrame();
+                }
+            }
+            
+            function fadeInMenu(submenu,callbacks)
             {
-                var submenu = mx.$('#content #submenu');
-                submenu.style.transition = "opacity 50ms linear";
+                submenu.style.transition = "opacity 200ms linear";
                 window.setTimeout( function()
                 {
                     mx.Core.waitForTransitionEnd(submenu,function()
                     {
-                        submenu.innerHTML = data;
-                        submenu.style.transition = "opacity 200ms linear";
-                        window.setTimeout( function()
+                        if( callbacks.length > 0 ) 
                         {
-                            mx.Core.waitForTransitionEnd(submenu,function()
+                            callbacks.forEach(function(callback)
                             {
-                                if( callbacks.length > 0 ) 
-                                {
-                                    callbacks.forEach(function(callback)
-                                    {
-                                        callback();
-                                    });
-                                }
-                            },"setSubMenu2");
-                            submenu.style.opacity = "";
-                        },0);
-                    },"setSubMenu1");
-                    submenu.style.opacity = "0";
-                },100);
-
-                if( isPhone ) menuPanel.close();
-            }        
-     
-            ret.openMenu = function(element,key)
-            {
-                if( activeMenu == key )
-                {
-                  return;
-                }
-                
-                activeMenu = key;
-
-                mx.Timer.clean();
-
-                cleanMenu();
-                
-                var entries = [];
-                var callbacks = [];
-                
-                //console.log(key);
-                //console.log(typeof subMenus[key]);
-                //console.log(subMenus[key]);
-                
-                for(var i = 0; i < subMenus[key].length; i++)
-                {
-                    var entry = subMenus[key][i];
-
-                    if( entry[0] == 'html' )
-                    {
-                        entries.push(entry[1]);
-                        //entries.push('<div class="service ' + key + '">' + entry[2] + '</div>');
-                        //postInit = this[entry[1]];
-                    }
-                    else if( entry[0] == 'js' )
-                    {
-                        callbacks.push(eval(entry[1]));
-                    }
-                    else
-                    {
-                        entries.push('<div class="service button ' + key + '" onClick="mx.Actions.openUrl(event,this,\'' + entry[1] + '\',' + entry[4] + ')"><div>' + entry[2] + '</div><div>' + entry[3] + '</div></div>');
-                    }
-                }
-                
-                setMenu(entries.join(""),callbacks);
-                
-                if( element != null ) element.classList.add("active");
+                                callback();
+                            });
+                        }
+                    },"setSubMenu2");
+                    submenu.style.opacity = "";
+                },0);
             }
-                
-            ret.openUrl = function(event,element,url,newWindow)
-            {
-                mx.Timer.clean();
 
-                activeMenu = "";
-            
-                if( (event && event.ctrlKey) || newWindow )
+            function setMenuEntries(data,callbacks)
+            {
+                var submenu = mx.$('#content #submenu');
+
+                if( mx.History.getActiveNavigation() == null || mx.History.getActiveNavigation().isEntry() )
                 {
-                    var win = window.open(url, '_blank');
+                    submenu.style.opacity = "0";
+                    submenu.innerHTML = data;
+                    fadeInMenu(submenu,callbacks);
+                }
+                else
+                {
+                    submenu.style.transition = "opacity 50ms linear";
+                    window.setTimeout( function()
+                    {
+                        mx.Core.waitForTransitionEnd(submenu,function()
+                        {
+                            submenu.innerHTML = data;
+                            fadeInMenu(submenu,callbacks);
+                            
+                        },"setSubMenu1");
+                        submenu.style.opacity = "0";
+                    }, 100);
+                }
+                
+                if( visualisationType != "desktop" ) menuPanel.close();
+            }        
+            
+            function activateMenu(subGroup)
+            {
+                mx.$$(".service.active").forEach(function(element){ element.classList.remove("active"); });
+                
+                if( subGroup )
+                {
+                    var element = document.getElementById(subGroup.getMainGroup().getId() + '-' + subGroup.getId());
+                    element.classList.add("active");
+                }
+            }
+
+            ret.openMenuById = function(mainGroupId,subGroupId)
+            {
+                menu = mx.Menu.getMainGroup(mainGroupId).getSubGroup(subGroupId);
+                mx.Actions.openMenu(menu);
+            
+            };
+            ret.openMenu = function(subGroup)
+            {
+                if( mx.History.getActiveNavigation() === subGroup ) return;
+                
+                showMenu();
+
+                mx.Menu.buildMenu( subGroup, setMenuEntries);
+
+                activateMenu(subGroup);
+
+                mx.History.addMenu(subGroup);
+            };
+
+            ret.openEntryById = function(event,mainGroupId,subGroupId,entryId)
+            {
+                var entry = mx.Menu.getMainGroup(mainGroupId).getSubGroup(subGroupId).getEntry(entryId);
+
+                if( (event && event.ctrlKey) || entry.getNewWindow() )
+                {
+                    var win = window.open(entry.getUrl(), '_blank');
                     win.focus();
                 }
                 else
                 {
-                    mx.$$(".service.active").forEach(function(element){ element.classList.remove("active") });
-                    mx.$("#content #inline").style.display = "none";
-                    mx.$("#content iframe").style.display = "";
-                    mx.$("#content iframe").setAttribute('src',url);
+                    mx.Actions.openEntry(entry,null);
                 }
-            }
-
-            ret.openHome = function()
-            {
-                let isAlreadyActive = ( activeMenu == "home" );
-                
-                if( !isAlreadyActive )
-                {
-                    activeMenu = "home";
+            };
             
-                    cleanMenu();
-                }
+            ret.openEntry = function(entry,url)
+            {
+                mx.History.addEntry( entry, url );
+
+                activateMenu(entry.getSubGroup());
+
+                var new_url = url ? url : entry.getUrl();
                 
+                //showIFrame();
+                
+                setIFrameUrl(new_url);
+            };
+
+            ret.openHome = function(event)
+            {
+                var subGroup = mx.Menu.getMainGroup('home').getSubGroup('home');
+                
+                var isActive = ( mx.History.getActiveNavigation() === subGroup );
+                
+                if( !isActive )
+                {
+                    activateMenu(null);
+                    
+                    showMenu();
+                    
+                    mx.History.addMenu(subGroup);
+                }
+
                 var datetime = new Date();
                 var h = datetime.getHours();
                 var m = datetime.getMinutes();
                 var s = datetime.getSeconds();
+                
+                if( demoMode ) h = 20;
 
                 var time = ("0" + h).slice(-2) + ':' + ("0" + m).slice(-2);
-                
+
                 var prefix = '';
                 if(h >= 18) prefix = mx.I18N.get('Good Evening');
                 else if(h >  12) prefix = mx.I18N.get('Good Afternoon');
                 else prefix = mx.I18N.get('Good Morning');
 
-    <?php
-        $name = $_SERVER['REMOTE_USERNAME'];
-        $handle = fopen(".htdata", "r");
-        if ($handle) {
-            while (($line = fgets($handle)) !== false) {
-                list($_username,$_name) = explode(":", $line);
-                if( trim($_username) == $name )
-                {
-                    $name = trim($_name);
-                    break;
-                }
-            }
-        
-            fclose($handle);
-        }
-        echo "            var name = " . json_encode($name) . ";\n";
-    ?>            
                 message = '<div class="service home">';
                 message += '<div class="time">' + time + '</div>';
-                message += '<div class="slogan">' + prefix + ', ' + name + '.</div>';
+                message += '<div class="slogan">' + prefix + ', ' + mx.User.name + '.</div>';
                 message += '<div class="imageTitle">' + mx.MainImage.getTitle() + '</div>';
                 message += '</div>';
-                
-                if( !isAlreadyActive ) setMenu(message,[]);
-                else mx.$('#content #submenu').innerHTML = message;
+
+                if( !isActive ) 
+                {
+                    setMenuEntries(message,[]);
+                }
+                else 
+                {
+                    mx.$('#content #submenu').innerHTML = message;
+                    if( typeof event != "undefined" && visualisationType != "desktop" ) menuPanel.close();
+                }
 
                 mx.Timer.register(mx.Actions.openHome,60000 - (s * 1000));
-            }
-            
-            ret.isMenuActive = function()
-            {
-                return !!activeMenu;
-            }
-            
+            };
+
             ret.init = function()
             {
-                initMenus();
+                sideElement = mx.$("#side");
+                
+                inlineElement = mx.$("#content #inline");
+                
+                iframeProgressElement = mx.$("#content #embedProgress");
+
+                iframeElement = mx.$("#content #embed");
+                iframeElement.addEventListener('load', iFrameLoadHandler);    
             }
-            
+
             return ret;
         })( mx.Actions || {} );
+
+        mx.Page = (function( ret ) {
+            ret.checkDeeplink = function(ref)
+            {
+                if( ref ) 
+                {
+                    var parts = ref.split(/%7C|\|/);
+                    var subMenuGroup = mx.Menu.getMainGroup(parts[0]).getSubGroup(parts[1]);
+                    if( parts.length > 2 )
+                    {
+                        var entry = subMenuGroup.getEntry(parts[2]);
+                        
+                        mx.Actions.openEntry(entry, parts.length > 3 ? decodeURIComponent( parts[3] ) : null );
+                    }
+                    else
+                    {
+                        mx.Actions.openMenu(subMenuGroup);
+                    }
+                }
+            };
+            
+            ret.initInfoLayer = function()
+            {
+                var divLayer = mx.$("#info");
+                var infoLayer = mx.$("#info .info");
+                var hintLayer = mx.$("#info .hint");
+                var progressLayer = mx.$("#info .progress");
+
+                function showInfo(animated,info,hint)
+                {
+                    infoLayer.innerHTML = info;
+                    hintLayer.innerHTML =  hint ? hint : "&nbsp;";
+                    hintLayer.style.visibility = hint ? "" : "hidden";
+                    
+                    divLayer.style.display = "flex";
+                    if( animated )
+                    {
+                        window.setTimeout(function(){ divLayer.style.backgroundColor = "rgba(0,0,0,0.5)"; }, 0);
+                    }
+                    else
+                    {
+                        divLayer.style.backgroundColor = "rgba(0,0,0,0.5)";
+                    }
+                }
+                
+                function hideInfo(animated)
+                {
+                    if( animated )
+                    {
+                        mx.Core.waitForTransitionEnd(divLayer, function(){ divLayer.style.display = ""; },"Info closed");
+                    }
+                    else
+                    {
+                        divLayer.style.display = "";
+                    }
+                    divLayer.style.backgroundColor = "rgba(0,0,0,0)";
+                }
+                
+                mx.State.init(function(connectionState,animated)
+                {
+                    //console.log("STATE: " + connectionState );
+                    
+                    if( connectionState == mx.State.SUSPEND )
+                    {
+                        showInfo(animated,mx.I18N.get("APP Suspend"),mx.I18N.get("tap to resume"));
+                    }
+                    else if( connectionState == mx.State.OFFLINE )
+                    {
+                        showInfo(animated,mx.I18N.get("Internet Offline"));
+                    }
+                    else if( connectionState == mx.State.ONLINE || connectionState == mx.State.UNREACHABLE || connectionState == mx.State.REACHABLE )
+                    {
+                        showInfo(animated,mx.I18N.get("VPN Offline"));
+                    }
+                    else if( connectionState == mx.State.UNAUTHORIZED )
+                    {
+                        showInfo(animated,"");
+                    }
+                    else
+                    {
+                        hideInfo(animated);
+                    }
+                }, function(inProgress)
+                {
+                    progressLayer.style.visibility = inProgress ? "visible" : "";
+                });
+            };
+            
+            return ret;
+        })( mx.Page || {} );
 
         function initContent()
         {
             readynessCount--;
-            if( readynessCount > 0 ) return;
+            if( readynessCount > 0 || !pageReady ) return;
 
             if( mx.MainImage.getUrl() !== "" )
             {
-                mx.$("body").classList.remove("nobackground" );
                 mx.$("#background").style.backgroundImage = "url(" + mx.MainImage.getUrl() + ")";
+                mx.$("#background").style.opacity = mx.darkLayout ? "0.7" : "1";
             }
             else
             {
-                mx.$("body").classList.remove("nobackground" );
+                mx.$("body").classList.add("nobackground" );
             }
-            mx.$("#background").style.opacity = "1";
 
             var elements = document.querySelectorAll("*[data-i18n]");
             elements.forEach(function(element)
@@ -539,53 +733,78 @@
                 element.innerHTML = mx.I18N.get(key);
             });
 
-            mx.Actions.init();
+            mx.Menu.init();
 
             mx.$('#logo').addEventListener("click",mx.Actions.openHome);
 
-            if( !mx.Actions.isMenuActive() ) mx.Actions.openHome();
+            mx.Actions.init();
+
+            var ref = mx.Host.getParameter("ref");
+
+            mx.History.init(function(mainGroup,subGroup,entry,url){
+                if( subGroup )
+                {
+                    if( entry ) mx.Actions.openEntry(entry,url);
+                    else mx.Actions.openMenu(subGroup);
+                }
+                else mx.Actions.openHome();
+            });
+
+            mx.Page.checkDeeplink(ref);
+
+            if( !mx.History.getActiveNavigation() ) mx.Actions.openHome();
 
             mx.$('#page').style.opacity = "1";
         }
 
+        function checkVisualisationType()
+        {
+            if( window.innerWidth < 600 ) visualisationType = "phone";
+            else if( window.innerWidth < 1024 ) visualisationType = "tablet";
+            else visualisationType = "desktop";
+            
+            menuPanel.enableBackgroundLayer(visualisationType !== "desktop");
+
+            if( visualisationType !== "desktop" )
+            {
+                mx.$("#side").classList.add("fullsize");
+            }
+            
+            if( visualisationType === "phone" )
+            {
+                mx.$('body').classList.add('phone');
+                mx.$('body').classList.remove('desktop');
+            }
+            else
+            {
+                mx.$('body').classList.remove('phone');
+                mx.$('body').classList.add('desktop');
+            }
+            
+            mx.Page.initTheme();
+        }       
+        
         function initPage()
         {
+            mx.Page.initInfoLayer();
+        
             mx.Swipe.init();
-
-            function isPhoneListener(mql){
-                isPhone=mql.matches;
-                if( isPhone )
-                {
-                    mx.$('body').classList.add('phone');
-                    mx.$('body').classList.remove('desktop');
+                        
+            menuPanel = mx.Panel.init({
+                isSwipeable: true,
+                enableBackgroundLayer: false,
+                selectors: {
+                    menuButtons: ".burger.button",
+                    panelContainer: '#menu',
+                    backgroundLayer: '#layer',
                 }
-                else
-                {
-                    mx.$('body').classList.remove('phone');
-                    mx.$('body').classList.add('desktop');
-                }
-            }
-            var mql = window.matchMedia('(max-width: 600px)');
-            mql.addListener(isPhoneListener);
-            isPhoneListener(mql);
-            
-            menuPanel = mx.Panel.init(
-                {
-                    isSwipeable: true,
-                    selectors: {
-                        menuButtons: ".burger.button",
-                        panelContainer: '#menu'
-                    },
-                }
-            );
+            });
 
             mx.$('#menu').addEventListener("beforeOpen",function(){
-                mx.$("#side").classList.remove("fullsize");
-                if( isPhone ) mx.$("#layer").classList.add("visible");
+                if( visualisationType == "desktop" ) mx.$("#side").classList.remove("fullsize");
             });
             mx.$('#menu').addEventListener("beforeClose",function(){
-                mx.$("#side").classList.add("fullsize");
-                mx.$("#layer").classList.remove("visible");
+                if( visualisationType == "desktop" ) mx.$("#side").classList.add("fullsize");
             });
 
             mx.$("#layer").addEventListener("click",function()
@@ -593,38 +812,80 @@
                 menuPanel.close();
             });
 
-            if( !isPhone )
-            {
-                var menuMql = window.matchMedia('(min-width: 800px)');
-                function checkMenu()
-                {
-                    if( menuMql.matches ) menuPanel.open();
-                    else menuPanel.close();
-                }
-                menuMql.addListener(checkMenu);
-                checkMenu();
+            function isPhoneListener(mql){ 
+                checkVisualisationType(); 
             }
-            
+            var phoneMql = window.matchMedia('(max-width: 600px)');
+            phoneMql.addListener(isPhoneListener);
+            isPhoneListener(phoneMql);
+
+            var desktopMql = window.matchMedia('(min-width: 1024px)');
+            function checkMenu(mql)
+            {
+                checkVisualisationType();
+
+                if( visualisationType === "desktop" ) 
+                {
+                    mx.$("#side").classList.remove("fullsize");
+                    menuPanel.open();
+                }
+                else 
+                {
+                    menuPanel.close();
+                }
+            }
+            desktopMql.addListener(checkMenu);
+            checkMenu(desktopMql);
+
+            pageReady = true;
+        
             initContent();
 
-            mx.Alarms.init();
+            if( mx.User.hasAdminUi() )
+            {
+                // defined in netdata.js (/components/)
+                mx.Alarms.init('.alarm.button','.alarm.button .badge');
+            }
+            else
+            {
+                mx.$(".alarm.button").style.display = 'none';
+            }
+            
+            mx.$(".spacer").innerHTML = document.location.hostname;
         }
+        
+        mx.OnScriptReady.push( function(){
+            var imageUrl = "/img/potd/today" + ( mx.Core.isSmartphone() ? "Portrait" : "Landscape") + ".jpg";
+            if( demoMode ) imageUrl = "https://images.pexels.com/photos/814499/pexels-photo-814499.jpeg";
+            var titleUrl = "/img/potd/todayTitle.txt";
+            mx.MainImage.init(imageUrl,titleUrl,initContent);
+        });
 
-        mx.I18N.init();
-
-        mx.MainImage.init();
-
-        if (document.readyState === "complete" || document.readyState === "interactive") 
-        {
-            initPage();
-        }
-        else 
-        {
-            document.addEventListener("DOMContentLoaded", initPage);
-        }
+        mx.OnDocReady.push( initPage );
 	</script>
 </head>
 <body>
+<script>
+    mx.Page = (function( ret ) {
+        ret.initTheme = function()
+        {
+            var darkMql = window.matchMedia( ( demoMode ? '' : '(prefers-color-scheme: dark) and ' ) + '(max-width: 600px)');
+            if( darkMql.matches )
+            {
+                document.body.classList.add("dark");
+            }
+            else
+            {
+                document.body.classList.remove("dark");
+            }
+            document.cookie = "theme=" + ( darkMql.matches ? "dark" : "light" ) + "; expires=0; domain=" + document.location.hostname;
+        };
+        
+        return ret;
+    })( mx.Page || {} );
+    
+    mx.Page.initTheme();
+</script>
 <div id="page" style="opacity:0;transition:opacity 300ms linear;">
     <div id="menu" class="c-panel">
         <div class="group">
@@ -637,20 +898,9 @@
                 <svg style="fill:white;stroke:white;" transform="scale(1.0)" enable-background="new 0 0 91 91" id="Layer_1" version="1.1" viewBox="0 0 91 91" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g><rect height="3.4" width="39.802" x="27.594" y="31.362"/><rect height="3.4" width="39.802" x="27.594" y="44.962"/><rect height="3.4" width="39.802" x="27.594" y="58.562"/></g></svg>
             </div>
         </div>
-        <div class="group flexInfo autoWidth">
-            <div class="header" data-i18n="NextCloud"></div>
-            <div class="service button" id="defaultEntry" onClick="mx.Actions.openMenu(this,'nextcloud')"><div data-i18n="NextCloud"></div><div></div></div>
-        </div>
-        <div class="group">
-            <div class="header" data-i18n="Automation"></div>
-            <div class="service button" onClick="mx.Actions.openMenu(this,'openhab')"><div data-i18n="Openhab"></div><div></div></div>
-            <div class="service button" onClick="mx.Actions.openMenu(this,'camera')"><div data-i18n="Cameras"></div><div></div></div>
-        </div>
-        <div class="group flexInfo">
-            <div class="header" data-i18n="Administration"></div>
-            <div class="service button" onClick="mx.Actions.openMenu(this,'tools')"><div data-i18n="Logs &amp; States"></div><div></div></div>
-            <div class="service button" onClick="mx.Actions.openMenu(this,'admin')"><div data-i18n="Tools"></div><div></div></div>
-            <div class="service button" onClick="mx.Actions.openMenu(this,'devices')"><div data-i18n="Devices"></div><div></div></div>
+        <div class="group" id="menuTemplate" style="display:none">
+            <div class="header"></div>
+            <div class="service button"><div></div><div></div></div>
         </div>
         <?php
             if( !isset($_SERVER['AUTH_TYPE']) || $_SERVER['AUTH_TYPE'] != "Basic" )
@@ -675,10 +925,26 @@
                 <div id="background"></div>
                 <div id="submenu"></div>
             </div>
-            <iframe frameborder="0"></iframe>
+            <iframe id="embed" frameborder="0" style="display:none"></iframe>
+            <div id="embedProgress" style="display:none">
+                <svg x="0px" y="0px" viewBox="0 0 100 100" enable-background="new 0 0 0 0" xml:space="preserve"><use href="#progress" /></svg>
+            </div>
         </div>
     </div>
     <div id="layer"></div>
+    <div id="info">
+        <div>
+            <span class="info"></span>
+            <span class="hint"></span>
+            <span class="progress">
+                <svg id="progress" x="0px" y="0px" viewBox="0 0 100 100" enable-background="new 0 0 0 0" xml:space="preserve">
+                    <path fill="currentColor" d="M73,50c0-12.7-10.3-23-23-23S27,37.3,27,50 M30.9,50c0-10.5,8.5-19.1,19.1-19.1S69.1,39.5,69.1,50">
+                        <animateTransform attributeName="transform" attributeType="XML" type="rotate" dur="1s" from="0 50 50" to="360 50 50" repeatCount="indefinite"></animateTransform>
+                    </path>
+                </svg>
+            </span>
+        </div>
+    </div>
 </div>
 </body>
 </html>

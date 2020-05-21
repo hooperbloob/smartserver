@@ -17,9 +17,7 @@ local_backup_path:                "/dataRaid/backups/"
 cloud_backup_source_path:         "/dataBackup/"
 cloud_backup_target_path:         "/mnt/dataCloud/"
 
-redis_socket_path:                "/var/run/redis/"
-
-nextcloud_data_path:              "/dataRaid/clouddata/"
+nextcloud_data_path:              "/dataRaid/nextcloud/"
 
 samba_master:                     "{%if is_production%}yes{%else%}no{%endif%}"
 
@@ -34,22 +32,20 @@ server_network:                   "{{server_subnet}}.0"
 # 0 => production, 1 => production
 netgroup:                         "{{server_ip_r[2]}}"
 
-mobile_vpn_network:               "10.100.{{netgroup}}.0"
+vpn_mobile_network:               "10.100.{{netgroup}}.0"
 
-cloud_vpn_network:                "10.0.{{netgroup}}.0"
-cloud_vpn_endpoint_master:        "10.0.{{netgroup}}.1"
-cloud_vpn_endpoint_slave:         "10.0.{{netgroup}}.2"
-
-cloud_net1_server_ip:             "10.1.{{netgroup}}.50"
-cloud_net1_gateway:               "10.1.{{netgroup}}.1"
-cloud_net1_network:               "10.1.{{netgroup}}.0"
-
-# temporary fix
-cloud_net2_server_ip:             "10.0.{{netgroup}}.2"
-# cloud_net2_server_ip:             "10.2.0.88"
-cloud_net2_gateway:               "10.2.0.1"
-cloud_net2_network:               "10.2.0.0"
+docker_hostaccess_network:        "172.16.0.0"
+docker_hostaccess_gateway:        "172.16.0.1"
 
 dns1:                             "8.8.8.8"
 dns2:                             "9.9.9.9"
 
+# deprecated
+cloud_vpn_network:                "10.0.{{netgroup}}.0"
+cloud_vpn_endpoint_master:        "10.0.{{netgroup}}.1"
+cloud_vpn_endpoint_slave:         "10.0.{{netgroup}}.2"
+
+openvpn_mobile_network:           "10.101.{{netgroup}}.0"
+
+# version of alpine linux used in several container based roles
+alpine_version:                   "3.11.6"

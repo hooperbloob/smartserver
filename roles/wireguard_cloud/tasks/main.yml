@@ -1,0 +1,132 @@
+- name: set active network
+  set_fact:
+    active_network: "{{main_network | default(vault_cloud_vpn_networks | first)}}"
+  tags: [ 'update_notifier_configs' ]
+    
+- name: prepare cloud settings
+  set_fact:
+    is_main_network: "{{active_network == (vault_cloud_vpn_networks | first)}}"
+    cloud_network: "{{vault_cloud_vpn_networks[active_network]}}"
+    dir_name: "wireguard_{{active_network}}"
+    etc_dir_name: "wireguard_{{active_network}}"
+    data_dir_name: "cloud{{ '' if active_network == (vault_cloud_vpn_networks | first) else '_' + active_network }}"
+    build_dir_name: "wireguard_{{active_network}}"
+    container_name: "wireguard_{{active_network}}"
+    image_name: "custom_wireguard_cloud"
+    exposed_port: "51820"
+    
+- name: prepare needed folder
+  file:
+    path: "{{item}}"
+    state: directory
+    owner: "root"
+    group: "root"
+    mode: 700
+  with_items:
+    - "{{global_etc}}{{etc_dir_name}}"
+    - "{{global_etc}}{{etc_dir_name}}/keys"
+    - "{{global_etc}}{{etc_dir_name}}/util"
+
+- name: prepare cloud folder
+  file:
+    path: "{{item}}"
+    state: directory
+    owner: "root"
+    group: "root"
+    mode: 0750
+  with_items:
+    - "{{raid_path}}{{data_dir_name}}"
+    - "{{raid_path}}{{data_dir_name}}/export"
+    - "{{raid_path}}{{data_dir_name}}/mount"
+
+- name: prepare nfs exported folder
+  file:
+    path: "{{raid_path}}{{data_dir_name}}/export/{{item}}"
+    state: directory
+    owner: "root"
+    group: "root"
+    mode: 0750
+  with_items: "{{cloud_network.peers}}"
+
+- name: prepare nfs mount points
+  file:
+    path: "{{raid_path}}{{data_dir_name}}/mount/{{item}}"
+    state: directory
+    owner: "root"
+    group: "root"
+    mode: 0750
+  with_items: "{{cloud_network.peers}}"
+
+- name: copy util
+  template:
+    src: "roles/wireguard_cloud/templates/util/{{item}}"
+    dest: "{{global_etc}}{{etc_dir_name}}/util/{{item}}"
+    owner: root
+    group: root
+    mode: 0700
+  with_items:
+    - wg-startup.sh
+  notify: "restart wireguard_cloud"
+
+- name: build docker image
+  vars:
+    name: "{{build_dir_name}}"
+    image_name: "{{image_name}}"
+    image_version: "{{alpine_version}}"
+    files:
+      - roles/wireguard_cloud/templates/container/Dockerfile
+  import_tasks: roles/container/tasks/build_docker_image.yml
+
+- name: connect cloud container
+  docker_network:
+    name: cloud
+    appends: yes
+
+- name: create docker container
+  docker_container:
+    name: "{{container_name}}"
+    image: "{{image_name}}:{{alpine_version}}"
+    state: present
+    network_mode: "none"
+#    recreate: true
+    env:
+      TZ: "{{timezone}}"
+    log_driver: journald
+    log_options:
+      tag: "{{container_name}}"
+    #capabilities:
+    #  - NET_ADMIN
+    #  - SYS_MODULE
+    #  - SYS_ADMIN
+    #  - SETPCAP
+    privileged: yes
+    #domainname : "cloud"
+    #hostname: "nfsd"
+    networks:
+      - name: "cloud"
+    networks_cli_compatible: yes
+    volumes:
+      - '{{global_etc}}{{etc_dir_name}}:/etc/wireguard:z'
+      - '{{raid_path}}{{data_dir_name}}:/cloud:z,rshared'
+    ports:
+    # - "2050:2049/tcp"
+     - "{{cloud_network.interface.listenPort}}:{{exposed_port}}/udp"
+  notify: "restart wireguard_cloud"
+
+#- name: clean old docker images => image does not exists
+#  shell: "docker rmi -f $(docker images --filter \"dangling=true\" -q)"
+#  when: "image_name not in image_exists.stdout"
+  
+# ***** FINALIZE *****
+- name: create systemd service
+  vars:
+    container_name: "{{container_name}}"
+    trigger_name: "wireguard_cloud"
+  import_tasks: roles/container/tasks/add_docker_service.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart wireguard_cloud"
+    service: "{{container_name}}.service"
+  import_tasks: roles/base/tasks/service_check.yml
+  #when: "is_main_network"

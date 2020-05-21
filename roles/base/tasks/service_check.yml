@@ -1,0 +1,16 @@
+#- name: test
+#  debug:
+#    msg: "{{ansible_facts.services[service]}}"
+
+- name: trigger service check handler
+  command: "/bin/true"
+  changed_when: "service not in ansible_facts.services or ansible_facts.services[service].state != 'running' or ansible_facts.services[service].status == 'disabled'"
+  notify: "{{notify}}"
+  
+#enabled :: explicitly installed
+#static :: installed as dependency      => mdmonitor
+#disabled :: not installed
+#unknown                                => openvpn@mobile or openvpn@cloud
+
+
+

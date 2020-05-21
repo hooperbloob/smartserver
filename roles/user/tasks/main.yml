@@ -9,6 +9,7 @@
     #update_password: on_create
     groups: users
     append: no
+  register: system_user_result
   with_items: "{{vault_usernames}}"
   
 - name: prepare user folder
@@ -19,66 +20,39 @@
     group: users
     mode: 0750
   with_items: "{{vault_usernames}}"
-    
-- name: add user to samba
-  shell: "( (pdbedit -L | grep {{item}}) && echo 'skipped' ) || ( ( printf '{{ vault_userdata[item].samba_password }}\n{{ vault_userdata[item].samba_password }}\n' | smbpasswd -a {{item}} ) && echo 'created' )"
-  register: command_result
-  #failed_when: "'command-not-found' in command_result.stderr"
-  changed_when: "'created' in command_result.stdout"
-  with_items: "{{vault_usernames}}"
-  notify: "restart samba"
 
+# refresh samba container, otherwise changes on /etc/passwd are not visible inside the container
+- name: refresh samba
+  systemd:
+    name: "samba"
+    state: restarted
+  when: "system_user_result.changed"
+  
+- name: check samba users
+  shell: "docker exec -i samba sh -c \"pdbedit -L\""
+  register: samba_user_result
+  changed_when: false
+  
+- name: add user to samba
+  shell: "(echo '{{vault_userdata[item].samba_password}}'; echo '{{vault_userdata[item].samba_password}}';) | docker exec -i samba sh -c \"smbpasswd -s -a {{item}}\""
+  #register: command_result
+  #failed_when: "'command-not-found' in command_result.stderr"
+  changed_when: "item not in samba_user_result.stdout"
+  with_items: "{{vault_usernames}}"
+  #notify: "restart samba"
+  
 - name: add user to apache .htpasswd
-  htpasswd:
-    path: "{{htdocs_path}}.htpasswd"
-    name: "{{item}}"
+  vars:
+    username: "{{item}}"
     password: "{{vault_userdata[item].web_password}}"
+    group: "USER"
+  include_tasks: roles/user/tasks/add_web_user.yml
   with_items: "{{vault_usernames}}"
 
 - name: add user name to .htdata
   lineinfile:
     path: "{{htdocs_path}}.htdata"
-    regexp: '^{{item}}: {{vault_userdata[item].name}}'
-    line: '{{item}}: {{vault_userdata[item].name}}'
+    regexp: '^{{item}}:{{vault_userdata[item].name}}'
+    line: '{{item}}:{{vault_userdata[item].name}}:{{vault_userdata[item].webui}}'
   with_items: "{{vault_usernames}}"
-   
-# **** APACHE USERS (WEB) ****
-- name: add user "{{vault_admin_username}}" to apache .htpasswd
-  htpasswd:
-    path: "{{htdocs_path}}.htpasswd"
-    name: "{{vault_admin_username}}"
-    password: "{{vault_admin_web_password}}"
-  
-- name: add user "{{vault_alexa_username}}" to apache .htpasswd
-  htpasswd:
-    path: "{{htdocs_path}}.htpasswd"
-    name: "{{vault_alexa_username}}"
-    password: "{{vault_alexa_web_password}}"
 
-- name: check if 'USER' group exists in apache
-  shell: "grep \"^USER\" {{htdocs_path}}.htgroups"
-  register: user_check
-  changed_when: user_check.stdout == ""
-  failed_when: no
-    
-- name: add 'USER' group to apache
-  lineinfile:
-    path: "{{htdocs_path}}.htgroups"
-    regexp: '^USER[\s:]{1}.*'
-    line: 'USER:'
-  when: user_check.stdout == ""
-
-- name: add admin to apache groups
-  lineinfile:
-    path: "{{htdocs_path}}.htgroups"
-    backrefs: yes
-    regexp: '^(USER:(?!.*{{vault_admin_username}}).*)'
-    line: '\1 {{vault_admin_username}}'
-
-- name: add user to apache groups
-  lineinfile:
-    path: "{{htdocs_path}}.htgroups"
-    backrefs: yes
-    regexp: '^(USER:(?!.*{{item}}).*)'
-    line: '\1 {{item}}'
-  with_items: "{{vault_usernames}}"

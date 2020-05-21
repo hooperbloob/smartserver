@@ -1,0 +1,24 @@
+{
+  "automation": {
+    "Automation": "Automation"
+  },
+  "other": {
+    "Other": "Sonstiges",
+    "Logs & States": "Logs & Status",
+    "States": "Status",
+    "Tools": "Tools",
+    "Devices": "Geräte"
+  },
+  "index": {
+    "Netdata alert api not avaiable": "Netdata alarm API ist nicht verfügbar",
+    "Logout": "Abmelden",
+    "Good Morning": "Guten Morgen",
+    "Good Afternoon": "Guten Tag",
+    "Good Evening": "Guten Abend",
+    "Internet Offline": "Internet Offline",
+    "VPN Offline": "VPN Offline",
+    "APP Suspend": "APP angehalten",
+    "tap to resume": "klicke zum aktivieren",
+    "Authentication failed. Please try again.": "Anmeldung fehlgeschlagen. Bitte melde dich erneut an."
+  }
+}

@@ -1,51 +1,52 @@
-- name: prepare folder
-  file:
-    path: "{{redis_socket_path}}"
-    state: directory
-    owner: root
-    group: root
-    mode: 0777
-    
+- name: set version
+  set_fact:
+    redis_version: '6.0.3'
+  tags: [ 'update_notifier_configs' ]
+  
 - name: check started docker
   systemd:
     name: docker
     state: started
-    
-- name: check docker image exists
-  shell: "docker images custom_redis:1.0.0"
-  register: image_exists
-  changed_when: "'custom_redis' not in image_exists.stdout"
-  
-- name: compose docker image => image does not exists
-  shell: "docker build -t custom_redis:1.0.0 roles/redis/templates/container/"
-  register: output
-  when: "'custom_redis' not in image_exists.stdout"
-  
-#- name: debug
-#  debug:
-#    var: output
 
 - name: create docker container
   docker_container:
     name: redis
-    image: custom_redis:1.0.0
+    image: "redis:{{redis_version}}-alpine"
     state: present
-    network_mode: "none"
+#    network_mode: "none"
 #    recreate: true
     env:
       TZ: "{{timezone}}"
     log_driver: journald
     log_options:
       tag: redis
-    volumes:
-      - '{{redis_socket_path}}:/var/run/redis:z'
+    ports:
+     - "127.0.0.1:6379:6379"
   notify: "restart redis"
 
 #- name: clean old docker images => image does not exists
 #  shell: "docker rmi -f $(docker images --filter \"dangling=true\" -q)"
 #  when: "'custom_redis' not in image_exists.stdout"
   
+# ***** FINALIZE *****
 - name: create systemd service
   vars:
     container_name: "redis"
   import_tasks: roles/container/tasks/add_docker_service.yml
+
+- name: register update notifier
+  vars:
+    name: "redis"
+    type: "docker"
+    url: "https://raw.githubusercontent.com/antirez/redis/5.0/00-RELEASENOTES"
+    config: {
+      repository: "redis",
+      pattern: "^([0-9\\.]+)-alpine$"
+    }
+  import_tasks: roles/update_notifier/tasks/add_notifier.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart redis"
+    service: "redis.service"
+  import_tasks: roles/base/tasks/service_check.yml

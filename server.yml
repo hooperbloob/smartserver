@@ -7,6 +7,8 @@
     - { import_role: { name: _init }, tags: [ 'always' ] }                                       # detect environment and load configs
     # ************************************   
 
+    - { import_role: { name: _init, tasks_from: preconditions } }
+  
     - name: loaded values from config files
       debug:
         msg: 
@@ -25,26 +27,41 @@
           - "flags:      is_suse: {{is_suse}}, is_fedora: {{is_fedora}}"
       tags: always
 
-    - { import_role: { name: fluentd, tasks_from: create_shared_folder }, tags: [ 'fluentd' ] }  # is creating /etc/fluent/_.ansible.d
+    # needed by all roles which needs to register their own fluentd handler
+    # search for "import_tasks: roles/fluentd/tasks/add_config.yml" to see which ones
+    - { import_role: { name: fluentd, tasks_from: create_shared_folder, handlers_from: empty }, tags: [ 'fluentd' ] }  # creates /etc/fluent/_.ansible.d
 
-    - { import_role: { name: apache, tasks_from: create_shared_folder }, tags: [ 'apache' ] }    # is creating {{global_etc}}apache2/_.ansible.d
+    # is creating and fetching wwwrun uid and gid to make them available globaly for all roles
+    - { import_role: { name: apache, tasks_from: ensure_www_user_exists, handlers_from: empty }, tags: [ 'always' ] }
 
-    - { import_role: { name: apache, tasks_from: ensure_www_user_exists }, tags: [ 'always' ] }
+    # needed by all roles which needs to register their own vhost
+    # search for "import_tasks: roles/apache/tasks/add_vhost.yml" to see which ones
+    - { import_role: { name: apache, tasks_from: create_shared_folder, handlers_from: empty }, tags: [ 'apache' ] }    # creates {{global_etc}}apache2/(_.ansible.conf.d & _.ansible.vhost.d)
+
+    # needed by all roles which needs to register menu entries in the web ui like
+    # search for "import_tasks: roles/apache_webui/tasks/add_webui.yml" to see which ones
+    - { import_role: { name: apache_webui, tasks_from: create_shared_folder, handlers_from: empty }, tags: [ 'apache_webui' ] }    # creates {{htdocs_path}}main/components
+
+    - { import_role: { name: systemd_watcher, tasks_from: create_shared_folder, handlers_from: empty }, tags: [ 'systemd_watcher' ] }
+    
+    - { import_role: { name: update_notifier, tasks_from: create_shared_folder, handlers_from: empty }, tags: [ 'update_notifier' ] }  # prototype
 
   tasks:
     - { import_role: { name: base }, tags: [ 'base' ] }                                          # basic setup like global folders and some often used basic packages
 
+    - { import_role: { name: alpine }, tags: [ 'alpine' ] }                                      # registers update notifier for alpine based container images
+
     - { import_role: { name: network }, tags: [ 'network' ] }                                    # basic network tweaks like enabled ipv6
       
     - { import_role: { name: firewalld }, tags: [ 'firewalld' ] }                                # firewalld configuration
-    - { import_role: { name: dns }, tags: [ 'dns' ] }                                            # dns server to handle you server domain properly together with a vpn
-    
+
     # ************ FLUSH HANDLER ***********    
-    - { meta: flush_handlers }                                                                   # activate network configs (network,firewall & dns). Otherwise docker related iptables rules are sometime lost and prevents to continue
+    - { meta: flush_handlers }                                                                   # activate network configs (network & firewall). Otherwise docker related iptables rules are sometime lost and prevents to continue
     # **************************************
 
     - { import_role: { name: cron }, tags: [ 'cron' ] }                                          # basic cron configuration + common cron jobs
-    - { import_role: { name: cron_service_check }, tags: [ 'cron_service_check' ] }              # checking for failed service starts
+
+    - { import_role: { name: systemd_watcher }, tags: [ 'systemd_watcher' ] }                    # checking for failed service starts
 
     - { import_role: { name: mdadm }, tags: [ 'mdadm' ] }                                        # raid monitor + weekly check cron job
     - { import_role: { name: smartd }, tags: [ 'smartd' ] }                                      # disk monitoring
@@ -56,9 +73,12 @@
     - { import_role: { name: openvpn }, tags: [ 'openvpn' ] }                                    # vpn server installation
     - { import_role: { name: openvpn_mobile }, tags: [ 'openvpn' ] }                             # vpn configuration (mobile access)
 
+    - { import_role: { name: wireguard }, tags: [ 'wireguard' ] }                                # vpn kernel module installation
+    - { import_role: { name: wireguard_mobile }, tags: [ 'wireguard', 'wireguard_mobile', 'alpine' ] } # vpn configuration (roadwarrior access)                      [docker,user:root]
+
     - { import_role: { name: postfix }, tags: [ 'postfix' ] }                                    # mail server to forward root mails
 
-    #- { import_role: { name: php }, tags: [ 'php' ] }                                            # php cli
+    - { import_role: { name: php }, tags: [ 'php' ] }                                            # php cli                                                           [docker,user:wwwrun|apache]
     
     - { import_role: { name: java }, tags: [ 'java' ] }                                          # jdk 1.8
     - { import_role: { name: java_maven }, tags: [ 'java_maven' ] }                              # apache maven => needed to compile cloudsync
@@ -67,45 +87,52 @@
 
     - { import_role: { name: nfs }, tags: [ 'nfs' ] }                                            # nfs file server
 
-    - { import_role: { name: samba }, tags: [ 'samba' ] }                                        # smb file server
+    - { import_role: { name: samba }, tags: [ 'samba', 'alpine' ] }                              # smb file server                                                   [docker,user:root]
 
-    - { import_role: { name: ftp }, tags: [ 'ftp' ] }                                            # ftp file server for camera picture upload and cleanup             [docker,user:ftp]
+    - { import_role: { name: ftp }, tags: [ 'ftp', 'alpine' ] }                                  # ftp file server for camera picture upload and cleanup             [docker,user:ftp]
 
-    - { import_role: { name: mysql }, tags: [ 'mysql' ] }                                        # mysql db => needed by nextcloud and openhab                       [docker]
+    - { import_role: { name: mysql }, tags: [ 'mysql' ] }                                        # mysql db => needed by nextcloud and openhab                       [docker,user:999]
 
-    - { import_role: { name: influxdb }, tags: [ 'influxdb' ] }                                  # influxdb => needed by openhab and netdata                         [docker]
+    - { import_role: { name: influxdb }, tags: [ 'influxdb' ] }                                  # influxdb => needed by openhab and netdata                         [docker,user:root]
     
-    - { import_role: { name: elasticsearch }, tags: [ 'elasticsearch' ] }                        # elasticsearch db => needed by elastalert and fluentd              [docker]
-    - { import_role: { name: kibana }, tags: [ 'kibana' ] }                                      # elasticsearch management ui kibana                                [docker]
+    - { import_role: { name: elasticsearch }, tags: [ 'elasticsearch' ] }                        # elasticsearch db => needed by elastalert and fluentd              [docker,user:1000]
+    - { import_role: { name: kibana }, tags: [ 'kibana' ] }                                      # elasticsearch management ui kibana                                [docker,user:1000]
     
-    - { import_role: { name: redis }, tags: [ 'redis' ] }                                        # redis db => needed by nextcloud                                   [docker]
+    - { import_role: { name: redis }, tags: [ 'redis' ] }                                        # redis db => needed by nextcloud                                   [docker,user:999]
     
-    - { import_role: { name: mosquitto }, tags: [ 'mosquitto' ] }                                # mqtt message broker                                               [docker]
+    - { import_role: { name: mosquitto }, tags: [ 'mosquitto' ] }                                # mqtt message broker                                               [docker,user:1883]
 
     - { import_role: { name: apache_ssl }, tags: [ 'apache_ssl' ] }                              # ssl certificates used for apache https
     - { import_role: { name: apache }, tags: [ 'apache' ] }                                      # apache web server & php runtime                                   [docker,user:wwwrun|apache]
 
-    - { import_role: { name: fluentd }, tags: [ 'fluentd' ] }                                    # log collector !!! MUST BE THE LAST ONE !!!
+    - { import_role: { name: fluentd }, tags: [ 'fluentd' ] }                                    # log collector !!! MUST BE SECOND LAST ONE !!!
+                                                                                                 # => needs elasticsearch role
+                                                                                                 # => and previous roles are triggering fluentd handler
 
+    - { import_role: { name: dns }, tags: [ 'dns', 'alpine' ] }                                  # dns server !!! MUST BE THE LAST ONE !!!                           [docker,user:root]
+                                                                                                 # => needs container role which needs fluentd role
+                                                                                                 # => should be the last one, because is modifying the resolve.conf 
+                                                                                                 # => and must be started right after with flush handlers
     # ************ FLUSH HANDLER ***********    
-    - { meta: flush_handlers }                                                                   # Previous roles are independent from upcomming roles, But lot of upcomming roles are depending from previous roles
+    - { meta: flush_handlers }                                                                   # Previous roles are independent from upcoming roles, But lot of upcoming roles are depending from previous roles
     # **************************************
 
     - { import_role: { name: user }, tags: [ 'user' ] }                                          # default users and permissions (linux, samba, web ...)
     
     - { import_role: { name: elastalert }, tags: [ 'elastalert' ] }                              # log alerting
 
-    #- { import_role: { name: clamav, tags: [ 'clamav' ] }                                      # antivirus
+    #- { import_role: { name: clamav, tags: [ 'clamav' ] }                                        # antivirus
 
     - { import_role: { name: netdata }, tags: [ 'netdata' ] }                                    # server monitoring
 
-    - { import_role: { name: grafana }, tags: [ 'grafana' ] }                                    # graphical dashboards                                              [docker]
+    - { import_role: { name: grafana }, tags: [ 'grafana' ] }                                    # graphical dashboards                                              [docker,user:root]
 
     - { import_role: { name: mysql_phpmyadmin }, tags: [ 'mysql_phpmyadmin' ] }                  # phpMyAdmin
 
     - { import_role: { name: apache_webui }, tags: [ 'apache_webui' ] }                          # responsive web ui
 
     - { import_role: { name: nextcloud }, tags: [ 'nextcloud' ] }                                # private cloud
+    - { import_role: { name: nextcloud_onlyoffice }, tags: [ 'nextcloud_onlyoffice' ] }          # private cloud office editor                                       [docker,user:106|108]
      
     - { import_role: { name: openhab }, tags: [ 'openhab' ] }                                    # openhab iot server
     - { import_role: { name: openhab_toolbox }, tags: [ 'openhab_toolbox' ] }                    # admin scripts and tools
@@ -123,6 +150,8 @@
     # **************************************
     
   post_tasks:
-    - { import_role: { name: nextcloud, tasks_from: enable_apps }, tags: [ 'nextcloud' ] }       # ENABLE NEXTCLOUD APPS needs a running system (php, database, redis ...)
+    - { import_role: { name: nextcloud, tasks_from: enable_apps, handlers_from: empty }, tags: [ 'nextcloud', 'nextcloud_apps' ] }   # ENABLE NEXTCLOUD APPS needs a running system (php, database, redis ...)
 
-    - { import_role: { name: kibana, tasks_from: import_dashboards }, tags: [ 'kibana', 'kibana_dashboard' ] } # IMPORT KIBANA DASHBOARDS needs a running system (elasticsearch & kibana)
+    - { import_role: { name: kibana, tasks_from: import_dashboards, handlers_from: empty }, tags: [ 'kibana', 'kibana_dashboard' ] } # IMPORT KIBANA DASHBOARDS needs a running system (elasticsearch & kibana)
+
+    - { import_role: { name: systemd_watcher, tasks_from: check_services, handlers_from: empty }, tags: [ 'validate' ] } # last check if all registered services are running

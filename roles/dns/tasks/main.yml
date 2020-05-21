@@ -1,110 +1,117 @@
-- name: install required packages => is_fedora
-  yum:
-    name: [
-        bind
-    ]
-    state: present
-  notify: "restart named"
-  when: is_fedora|bool
-
-- name: install required packages => is_suse
-  zypper:
-    name: [
-        bind
-      , yast2-dns-server
-    ]
-    state: present
-  notify: "restart named"
-  when: is_suse|bool
-  
-- name: copy config
-  template:
-    src: "templates/etc/named.conf"
-    dest: "/etc/named.conf"
-    owner: root
-    group: named
-    mode: 0640
-  notify: "restart named"
-  
-- name: create a symbolic link => is_fedora
-  file:
-    src: /var/named/
-    dest: /var/lib/named
-    state: link
-    follow: no
-    owner: named
-    group: named
-  when: is_fedora|bool
-  
 - name: prepare needed folder
   file:
-    path: "/var/lib/{{item}}"
+    path: '{{item}}'
     state: directory
-    owner: named
-    group: named
-    mode: 0755
+    owner: root
+    group: root
+    mode: 0750
   with_items:
-    - named/
-    - named/master/ # is missing on fedora
-    - named/dyn/ # is missing on fedora
-  
-- name: copy var folder
+    - "{{ global_etc }}named"
+
+- name: copy config
   template:
-    src: "templates/var/lib/named/{{item}}"
-    dest: "/var/lib/named/{{item}}"
-    owner: named
-    group: named
-    mode: 0644
+    src: "templates/etc/{{item}}"
+    dest: "{{ global_etc }}named/{{item}}"
+    owner: root
+    group: root
+    mode: 0640
   with_items:
-    - "master/server_reverse.in-addr.arpa"
-    - "master/server_forward"
-    - "127.0.0.zone"
-    - "localhost.zone"
-    - "root.hint"
-  notify: "restart named"
+    - "dnsmasq.conf"
+    - "dnsmasq-hosts"
+    - "resolv.dnsmasq.conf"
+
+- name: build docker image
+  vars:
+    name: "named"
+    image_name: "custom_named"
+    image_version: "{{alpine_version}}"
+    files:
+      - roles/dns/templates/container/Dockerfile
+  import_tasks: roles/container/tasks/build_docker_image.yml
   
-- name: set selinux configuration => is_fedora
-  sefcontext:
-    target: "{{item.target}}"
-    ftype: "{{item.ftype}}"
-    setype: "{{item.setype}}"
-    seuser: "system_u"
+- name: create docker container
+  docker_container:
+    name: named
+    image: "custom_named:{{alpine_version}}"
     state: present
-  register: sefcontext_result
-  with_items:
-    - { ftype: "l", setype: "named_zone_t", target: "/var/lib/named" }
-    - { ftype: "d", setype: "named_zone_t", target: "/var/named(/.*)?" }
-    - { ftype: "f", setype: "named_conf_t", target: "/var/named(/.*)?" }
-  when: is_fedora|bool
+#    recreate: true
+    env:
+      TZ: "{{timezone}}"
+    log_driver: journald
+    log_options:
+      tag: named
+    volumes:
+      - '{{ global_etc }}named/dnsmasq-hosts:/etc/dnsmasq-hosts:z'
+      - '{{ global_etc }}named/dnsmasq.conf:/etc/dnsmasq.conf:z'
+      - '{{ global_etc }}named/resolv.dnsmasq.conf:/etc/resolv.dnsmasq.conf:z'
+    ports:
+      - "53:53/udp"
+  notify: "restart named"
 
-- name: reload selinux configuration => is_fedora and sefcontext changed
-  shell: "restorecon {{item}}"
-  with_items:
-    - "/var/lib/named"
-    - "-irv /var/named"
-  when: is_fedora|bool and sefcontext_result.changed
-
-- name: set resolv config => is_fedora
+# ***** ENABLE USAGE OF LOCAL DNS *****
+- name: disable NetworkManager dns handling => is_fedora
   lineinfile:
-    path: /etc/sysconfig/network-scripts/ifcfg-eth0
+    path: /etc/NetworkManager/NetworkManager.conf
+    insertafter: '^\[main\]'
     regexp: '^{{item.field}}\s*='
-    line: '{{item.field}}="{{item.value}}"'
+    line: '{{item.field}}={{item.value}}'
+  register: networkmanager_status
   with_items:
-    - { field: "PEERDNS", value: "no" }
-    - { field: "DNS1", value: "127.0.0.1" }
-    - { field: "SEARCH", value: "{{server_domain}}" }
-  notify: "restart networkmanager"
+    - { field: "dns", value: "none" }
   when: is_fedora|bool
 
-- name: set forwarder config => is_suse
+- name: netconfig update => is_fedora and NetworkManager changed
+  systemd:
+    name: NetworkManager
+    state: restarted
+  when: "is_fedora|bool and networkmanager_status.changed"
+
+- name: disable netconfig dns handling => is_suse
   lineinfile:
     path: /etc/sysconfig/network/config
     regexp: '^{{item.field}}\s*='
     line: '{{item.field}}="{{item.value}}"'
+  register: netconfig_status
   with_items:
-    - { field: "NETCONFIG_DNS_FORWARDER", value: "bind"}
-    - { field: "NETCONFIG_DNS_STATIC_SERVERS", value: ""}
-  notify:
-    - "refresh netconfig"
-    - "restart named"
+    - { field: "NETCONFIG_DNS_POLICY", value: "" }
   when: is_suse|bool
+
+- name: netconfig update => is_suse and netconfig changed
+  shell: "netconfig update -f"
+  when: "is_suse|bool and netconfig_status.changed"
+  
+- name: remove symlink => is_suse and netconfig changed
+  file:
+    path: /etc/resolv.conf
+    state: absent
+  when: "is_suse|bool and netconfig_status.changed"
+
+- name: create file => is_suse and netconfig changed
+  file:
+    path: /etc/resolv.conf
+    state: touch
+    owner: root
+    group: root
+    mode: 0755
+  when: "is_suse|bool and netconfig_status.changed"
+
+- name: set dns config
+  lineinfile:
+    path: /etc/resolv.conf
+    regexp: '^{{item.field}} \s*'
+    line: '{{item.field}} {{item.value}}'
+  with_items:
+    #- { field: "search", value: "{{server_domain}}"}
+    - { field: "nameserver", value: "127.0.0.1"}
+
+# ***** FINALIZE *****
+- name: create systemd service
+  vars:
+    container_name: "named"
+  import_tasks: roles/container/tasks/add_docker_service.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart named"
+    service: "named.service"
+  import_tasks: roles/base/tasks/service_check.yml

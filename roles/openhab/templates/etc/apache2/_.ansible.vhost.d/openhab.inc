@@ -1,9 +1,22 @@
 Alias /toolbox "{{htdocs_path}}toolbox"
 
+# forced http1 is needed for openhab app on android. Soemtimes is stucks with http2 enabled
+Protocols http/1.1
+ProtocolsHonorOrder Off
+
 <Location />
+  # When Upgrade:websocket header is present, redirect to ws
+  # Using NC flag (case-insensitive) as some browsers will pass Websocket
+  RewriteCond %{HTTP:Upgrade} =websocket [NC]
+  RewriteRule ^/rest/(.*) ws://127.0.0.1:8080/rest/$1 [P,L]
+
   ProxyPass http://127.0.0.1:8080/
   ProxyPreserveHost on
   RequestHeader set X-Forwarded-Proto "https" env=HTTPS
+</Location>
+
+<Location /basicui/manifest.json>
+  Require all granted
 </Location>
 
 <Location /toolbox>

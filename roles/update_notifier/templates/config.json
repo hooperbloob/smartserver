@@ -1,0 +1,6 @@
+{
+    "name": "{{name}}",
+    "type": "{{type}}",
+    "url": "{{url}}",
+    "config": {{config | default('{}')}}
+}

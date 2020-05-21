@@ -1,0 +1,88 @@
+- name: prepare mobile settings
+  set_fact:
+    vpn_gates: []
+
+- name: filter vpn_gates
+  set_fact:
+    vpn_gates: "{{ vpn_gates + ( vault_userdata[item].vpn_gates | default(['']) | map('regex_replace', '(.*)', item + '_\\1') | map('regex_replace', '(.*)_$', '\\1') | list ) }}"
+  with_items: "{{vault_usernames}}"
+
+- name: prepare config folder
+  file:
+    path: "{{item}}"
+    state: directory
+    owner: "root"
+    group: "root"
+    mode: 700
+  with_items:
+    - "{{global_etc}}wireguard_mobile"
+    - "{{global_etc}}wireguard_mobile/util"
+    - "{{global_etc}}wireguard_mobile/keys"
+    - "{{global_etc}}wireguard_mobile/clients"
+    
+# fault tolerant to avoid errors if key vault files does not exist
+- name: copy keys => is_production
+  copy:
+    src: "{{config_path}}vault/wireguard_mobile/"
+    dest: "{{global_etc}}wireguard_mobile/keys/"
+    decrypt: yes
+    owner: root
+    group: root
+    mode: 0600
+  failed_when: no
+  when: "is_production|bool"
+  
+- name: copy util
+  template:
+    src: "roles/wireguard_mobile/templates/util/{{item}}"
+    dest: "{{global_etc}}wireguard_mobile/util/{{item}}"
+    owner: root
+    group: root
+    mode: 0700
+  with_items:
+    - wg-startup.sh
+  notify: "restart wireguard_mobile"
+
+- name: build docker image
+  vars:
+    name: "wireguard_mobile"
+    image_name: "custom_wireguard_mobile"
+    image_version: "{{alpine_version}}"
+    files:
+      - roles/wireguard_mobile/templates/container/Dockerfile
+  import_tasks: roles/container/tasks/build_docker_image.yml
+  
+- name: create docker container
+  docker_container:
+    name: wireguard_mobile
+    image: "custom_wireguard_mobile:{{alpine_version}}"
+    state: present
+    network_mode: "host"
+#    recreate: true
+    env:
+      TZ: "{{timezone}}"
+    log_driver: journald
+    log_options:
+      tag: custom_wireguard_mobile
+    capabilities:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - '{{global_etc}}wireguard_mobile:/etc/wireguard:z'
+  notify: "restart wireguard_mobile"
+
+#- name: clean old docker images => image does not exists
+#  shell: "docker rmi -f $(docker images --filter \"dangling=true\" -q)"
+#  when: "'custom_wireguard_mobile' not in image_exists.stdout"
+  
+# ***** FINALIZE *****
+- name: create systemd service
+  vars:
+    container_name: "wireguard_mobile"
+  import_tasks: roles/container/tasks/add_docker_service.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart wireguard_mobile"
+    service: "wireguard_mobile.service"
+  import_tasks: roles/base/tasks/service_check.yml

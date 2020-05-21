@@ -1,3 +1,8 @@
+- name: set version
+  set_fact:
+    grafana_version: '6.7.3'
+  tags: [ 'update_notifier_configs' ]    
+
 - name: prepare needed folder
   file:
     path: '{{item}}'
@@ -42,17 +47,25 @@
     name: docker
     state: started
     
+- name: connect grafana with databases
+  docker_network:
+    name: grafana_databases
+    connected:
+      - influxdb
+    appends: yes
+  tags: ['influxdb']
+
 - name: create docker container
   docker_container:
     name: grafana
-    image: grafana/grafana:6.4.4
+    image: "grafana/grafana:{{grafana_version}}"
     state: present
-    network_mode: "host"
+#    network_mode: "host"
     user: "root:root"
 #    recreate: true
     env:
       GF_SERVER_DOMAIN: "{{server_domain}}"
-      GF_SERVER_HTTP_ADDR: "127.0.0.1"
+#      GF_SERVER_HTTP_ADDR: "127.0.0.1"
       GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:/grafana"
 #      GF_LOG_MODE: "syslog"
 #      GF_LOG_SYSLOG_TAG: "grafana"
@@ -61,24 +74,52 @@
     log_driver: journald
     log_options:
       tag: grafana
+    networks:
+      - name: "grafana_databases"
+    networks_cli_compatible: yes
     volumes:
       - '{{global_lib}}grafana:/var/lib/grafana:z'
       - '{{global_lib}}grafana/provisioning:/etc/grafana/provisioning:z'
-    #ports:
-    # - "9000:3000"  
+    ports:
+     - "127.0.0.1:3000:3000"
   notify: "restart grafana"
-    
-- name: create systemd service
+      
+# ***** FINALIZE *****
+- name: register webui
   vars:
-    container_name: "grafana"
-  import_tasks: roles/container/tasks/add_docker_service.yml
-  
+    name: "grafana"
+    js_file: "templates/webui/grafana.js"
+    i18n_files: [ { language: "de", file: "templates/webui/grafana.de.json" } ]
+  import_tasks: roles/apache_webui/tasks/add_webui.yml
+
+- name: copy apache config
+  vars:
+    config_file: "templates/etc/apache2/_.ansible.conf.d/grafana.conf"
+  import_tasks: roles/apache/tasks/add_config.yml
+
 - name: copy fluentd config
   vars:
     config_file: "templates/etc/fluent/_.ansible.d/grafana.conf"
   import_tasks: roles/fluentd/tasks/add_config.yml
       
-- name: copy apache config
+- name: create systemd service
   vars:
-    config_file: "templates/etc/apache2/_.ansible.conf.d/grafana.conf"
-  import_tasks: roles/apache/tasks/add_config.yml
+    container_name: "grafana"
+  import_tasks: roles/container/tasks/add_docker_service.yml
+  
+- name: register update notifier
+  vars:
+    name: "grafana"
+    type: "docker"
+    url: "https://grafana.com/docs/grafana/latest/guides/whats-new-in-v6-6/"
+    config: {
+      repository: "grafana/grafana",
+      pattern: "^([0-9\\.]+)$"
+    }
+  import_tasks: roles/update_notifier/tasks/add_notifier.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart grafana"
+    service: "grafana.service"
+  import_tasks: roles/base/tasks/service_check.yml

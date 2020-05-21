@@ -1,0 +1,112 @@
+- name: install required packages => is_fedora
+  yum:
+    name: virtualbox
+    state: present
+  when: is_fedora|bool
+  notify: "restart virtualbox" 
+
+- name: install required packages => is_suse
+  zypper:
+    name: virtualbox
+    state: present
+  when: is_suse|bool
+  notify: "restart virtualbox" 
+  
+#- name: install required python pip modules
+#  pip: 
+#    name: PyGithub
+#    executable: pip3 
+
+- name: prepare needed folder
+  file:
+    path: "{{item.path}}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{item.mode}}"
+  with_items:
+    - { mode: "u=rwx,g=rx,o=", path: "/opt/ci_service" }
+    - { mode: "u=rwx,g=rx,o=rx", path: "{{global_log}}ci" }
+
+- name: install archive => nextcloud does not exists
+  unarchive:
+    src: "https://releases.hashicorp.com/vagrant/2.2.6/vagrant_2.2.6_linux_amd64.zip"
+    dest: "/opt/ci_service"
+    remote_src: yes
+    creates: "/opt/ci_service/vagrant"
+    owner: root
+    group: root
+    mode: 0750
+
+- name: copy ci package
+  copy:
+    src: "templates/opt/ci_service/ci"
+    dest: "/opt/ci_service"
+    owner: root
+    group: root
+    mode: 0750
+
+- name: copy ci_service
+  template:
+    src: "templates/opt/ci_service/ci_service"
+    dest: "/opt/ci_service/ci_service"
+    owner: root
+    group: root
+    mode: 0750
+    
+- name: copy webui
+  copy:
+    src: "templates/htdocs/ci"
+    dest: "{{htdocs_path}}"
+    owner: "{{system_users['www'].name}}"
+    group: "{{system_groups['www'].name}}"
+    mode: 0750
+  tags: ['apache_webui_page']
+
+- name: copy webui config
+  template:
+    src: "templates/config.php"
+    dest: "{{htdocs_path}}ci/config.php"
+    owner: "{{system_users['www'].name}}"
+    group: "{{system_groups['www'].name}}"
+    mode: 0750
+  tags: ['apache_webui_page']
+
+- name: register webui
+  vars:
+    name: "ci_service"
+    js_file: "templates/webui/ci_service.js"
+    i18n_files: [ { language: "de", file: "templates/webui/ci_service.de.json" } ]
+  import_tasks: roles/apache_webui/tasks/add_webui.yml
+
+- name: create check cron job
+  vars:
+    name: "Continues integration job"
+    cmd: "/opt/ci_service/ci_service start > /dev/null"
+    file: "ansible_ci_service"
+    minute: "*/5"
+  import_tasks: roles/cron/tasks/add_cronjob.yml
+  when: "is_production|bool"
+  
+- name: create cleanup cron job
+  vars:
+    name: "Continues integration cleanup"
+    cmd: "ls -1t /dataDisk/var/log/ci/*.log | tail -n +50 | xargs rm -f"
+    file: "ansible_ci_service"
+    hour: "0"
+    minute: "40"
+  import_tasks: roles/cron/tasks/add_cronjob.yml
+
+# ***** FINALIZE *****
+- name: register service watcher
+  vars:
+    name: "vboxdrv"
+  import_tasks: roles/systemd_watcher/tasks/add_watcher.yml
+
+- name: trigger service check handler
+  vars:
+    notify: "restart virtualbox"
+    service: "vboxdrv.service"
+    process: "lsmod | grep vbox"
+  import_tasks: roles/base/tasks/service_process_check.yml
+  

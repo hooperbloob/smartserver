@@ -6,9 +6,9 @@
     name: redis
     state: started
     daemon_reload: yes
-  changed_when: ansible_facts.services["redis.service"].state != 'running'
+  changed_when: "'redis.service' not in ansible_facts.services or ansible_facts.services['redis.service'].state != 'running'"
 
 - name: wait for redis to become ready
   wait_for:
-    path: "{{redis_socket_path}}redis.sock"
-  changed_when: ansible_facts.services["redis.service"].state != 'running'
+    port: 6379
+  changed_when: "'redis.service' not in ansible_facts.services or ansible_facts.services['redis.service'].state != 'running'"
